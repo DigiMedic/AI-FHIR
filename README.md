@@ -1,6 +1,6 @@
 # AIHDS - Platforma pro strukturování dat ve zdravotnictví
 
-https://i.ibb.co/3Y2P8t8/DALL-E-2024-07-14-14-18-27-A-clean-and-minimalistic-pixel-art-hero-image-for-the-AIHDS-platform-inte.webp
+![AIHDS Logo](https://i.ibb.co/3Y2P8t8/DALL-E-2024-07-14-14-18-27-A-clean-and-minimalistic-pixel-art-hero-image-for-the-AIHDS-platform-inte.webp)
 
 ## Úvod
 
