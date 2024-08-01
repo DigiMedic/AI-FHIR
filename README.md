@@ -1,4 +1,4 @@
-# AIHDS - Platforma pro strukturování dat ve zdravotnictví
+# AI-FHIR - Platforma pro strukturování dat ve zdravotnictví
 
 ![AIHDS Logo](https://i.ibb.co/3Y2P8t8/DALL-E-2024-07-14-14-18-27-A-clean-and-minimalistic-pixel-art-hero-image-for-the-AIHDS-platform-inte.webp)
 
