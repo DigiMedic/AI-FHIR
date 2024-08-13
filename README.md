@@ -29,6 +29,20 @@ AI-FHIR komponenta nabízí:
 - **AI modely**: GPT-4.0, vlastní NLP modely
 - **OCR**: Tesseract
 - **Backend Integrace**: DigiMedic FHIR Backend API
+---
+  ## 10. Referenční materiály a odkazy
+
+- **[GPT-4.0](https://openai.com/research/gpt-4)**
+- **[FHIR Specification](https://build.fhir.org/)**
+- **[NCEZ Seznam Zkratek](https://ncez.mzcr.cz/cs/seznam-zkratek/seznam-zkratek)**
+- **[NCEZ Národní Kontaktni Místo](https://ncez.mzcr.cz/cs/narodni-kontaktni-misto-elektronickeho-zdravotnictvi/narodni-kontaktni-misto-pro-elektronicke)**
+- **[NIXZD Dokumenty](https://www.nixzd.cz/dokumenty)**
+- **[IHE Czech](https://www.ihe-czech.cz/)**
+- **[GDPR Compliance](https://gdpr.eu/)**
+- **[EHDS Specification](https://ec.europa.eu/health/ehealth/ehds_en)**
+- **[Ethical AI Guidelines](https://www.acm.org/code-of-ethics)**
+- **[Security Best Practices](https://www.nist.gov/topics/cybersecurity)**
+---
 
 ## Roadmapa
 
