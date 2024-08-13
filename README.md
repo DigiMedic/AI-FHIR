@@ -33,7 +33,7 @@ AI-FHIR komponenta nabízí:
   ## 10. Referenční materiály a odkazy
 
 - **[GPT-4.0](https://openai.com/research/gpt-4)**
-- **[FHIR-cz specifikace a prifily](https://build.fhir.org/ig/ncez-cz/cz-core/index.html)**(https://build.fhir.org/)**
+- **[FHIR-cz specifikace a prifily](https://build.fhir.org/ig/ncez-cz/cz-core/index.html)**
 - **[NCEZ Seznam Zkratek](https://ncez.mzcr.cz/cs/seznam-zkratek/seznam-zkratek)**
 - **[NCEZ Národní Kontaktni Místo](https://ncez.mzcr.cz/cs/narodni-kontaktni-misto-elektronickeho-zdravotnictvi/narodni-kontaktni-misto-pro-elektronicke)**
 - **[NIXZD Dokumenty](https://www.nixzd.cz/dokumenty)**
