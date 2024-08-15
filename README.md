@@ -2,33 +2,49 @@
 
 ![AIHDS Logo](https://i.ibb.co/3Y2P8t8/DALL-E-2024-07-14-14-18-27-A-clean-and-minimalistic-pixel-art-hero-image-for-the-AIHDS-platform-inte.webp)
 
-## Projektový brief
+## Přehled projektu
 
 ### Úvod
-AI-FHIR komponenta je specializovaný nástroj navržený pro automatické strukturování nestrukturovaných zdravotních dat do formátu FHIR (Fast Healthcare Interoperability Resources). Tato komponenta slouží jako most mezi uživatelem a DigiMedic backendem, optimalizując proces převodu a ukládání dat.
+AI-FHIR komponenta je specializovaný nástroj pro automatické strukturování nestrukturovaných zdravotních dat do standardizovaného formátu **FHIR** (Fast Healthcare Interoperability Resources). Tato komponenta slouží jako most mezi uživatelem a **DigiMedic** backendem, optimalizuje proces převodu a ukládání zdravotních dat.
 
-### Popis problému
-Zdravotnická zařízení často pracují s nestrukturovanými daty, která je obtížné efektivně integrovat do moderních systémů pro správu zdravotních informací. Manuální strukturování těchto dat je časově náročné a náchylné k chybám.
+### Problém
+Zdravotnická zařízení často čelí výzvám při práci s nestrukturovanými daty, která je obtížné integrovat do moderních zdravotních informačních systémů. Manuální strukturování dat je nejen časově náročné, ale i náchylné k chybám.
 
 ### Řešení
-AI-FHIR komponenta nabízí:
-- Automatickou extrakci relevantních informací z různých typů dokumentů
-- Převod extrahovaných dat do strukturovaného FHIR formátu
-- Seamless integraci s DigiMedic backendem pro ukládání a správu dat
-- Uživatelsky přívětivé rozhraní pro nahrávání dokumentů a kontrolu výsledků
+**AI-FHIR** komponenta poskytuje:
+- **Automatickou extrakci**: Relevantní informace jsou automaticky extrahovány z různých typů dokumentů.
+- **Převod do FHIR formátu**: Extrahovaná data jsou automaticky konvertována do FHIR-kompatibilních zdrojů.
+- **Seamless integraci**: Přímé napojení na DigiMedic backend pro ukládání a správu dat.
+- **Uživatelsky přívětivé rozhraní**: Intuitivní prostředí pro nahrávání dokumentů a kontrolu výsledků.
 
 ### Klíčové funkce
-1. **Zpracování více formátů**: Podpora textových dokumentů, PDF a naskenovaných obrázků
-2. **AI-poháněná extrakce**: Využití NLP a ML modelů pro přesnou extrakci dat
-3. **FHIR mapování**: Automatická konverze extrahovaných dat do FHIR-kompatibilních zdrojů
-4. **Integrace s DigiMedic**: Přímé napojení na DigiMedic backend pro ukládání strukturovaných dat
-5. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků
+1. **Podpora více formátů**: Zpracování textových dokumentů, PDF a naskenovaných obrázků.
+2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí NLP a ML modelů.
+3. **FHIR mapování**: Automatická konverze dat do FHIR zdrojů.
+4. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
+5. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
 
 ### Technologický stack
-- **Frontend**: React.js s shadcn/ui
+- **Frontend**: React.js s použitím shadcn/ui
 - **AI modely**: GPT-4.0, vlastní NLP modely
 - **OCR**: Tesseract
-- **Backend Integrace**: DigiMedic FHIR Backend API
+- **Backend**: DigiMedic FHIR Backend API
+
+---
+
+## Diagramy
+
+### Architektura AI-FHIR Komponenty
+![Architektura AI-FHIR Komponenty](https://github.com/DigiMedic/AI-FHIR/blob/a7d991a0c7bbe8fd5f25427b4064ce71512fb1e4/Al-FHIR%20Komponenta%20Architecture.svg)
+
+Tento diagram ukazuje architekturu AI-FHIR komponenty, včetně klíčových součástí a jejich propojení.
+
+### Tok Zpracování AI-FHIR Komponenty
+![Tok Zpracování AI-FHIR Komponenty](https://github.com/DigiMedic/AI-FHIR/blob/a7d991a0c7bbe8fd5f25427b4064ce71512fb1e4/AI-FHIR%20Komponenta%20Flowchart.svg)
+
+Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nahrání dokumentu po jeho uložení do FHIR formátu.
+
+---
 ---
   ## 10. Referenční materiály a odkazy
 
