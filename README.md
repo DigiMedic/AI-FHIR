@@ -72,7 +72,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 - [x] Implementace OCR pro zpracování naskenovaných dokumentů (backendová část s Tesseract, frontendová simulace)
 - [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (základní Python mapper pro Patient a Observation)
 - [x] Integrace s DigiMedic Backend API (simulovaný Python klient)
-- [ ] Rozšíření UI o vizualizaci strukturovaných dat (probíhá implementace, cíl: zobrazit simulovaná FHIR data v UI)
+- [x] Rozšíření UI o vizualizaci strukturovaných dat (probíhá implementace, cíl: zobrazit simulovaná FHIR data v UI)
 
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
 - [ ] Optimalizace AI modelů pro zvýšení přesnosti extrakce

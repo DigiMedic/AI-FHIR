@@ -2,6 +2,81 @@
 import React, { useState } from 'react';
 import './App.css';
 
+// Define sample FHIR bundle at the top level
+const sampleFhirBundle = {
+  resourceType: "Bundle",
+  id: "bundle-example-ui-simulated",
+  type: "collection",
+  entry: [
+    {
+      fullUrl: "Patient/pac-karelnovot-19750320",
+      resource: {
+        resourceType: "Patient",
+        id: "pac-karelnovot-19750320",
+        meta: {
+          profile: [
+            "https://ncez.mzcr.cz/fhir/core/StructureDefinition/CzPatient"
+          ]
+        },
+        name: [{
+          use: "official",
+          given: ["Karel"],
+          family: "Novotný"
+        }],
+        birthDate: "1975-03-20"
+      }
+    },
+    {
+      fullUrl: "Observation/obs-pac-karelnovot-19750320-bp1",
+      resource: {
+        resourceType: "Observation",
+        id: "obs-pac-karelnovot-19750320-bp1",
+        meta: {
+          profile: [
+            "https://ncez.mzcr.cz/fhir/core/StructureDefinition/VitalSignsObservation"
+          ]
+        },
+        status: "final",
+        category: [{
+          coding: [{
+            system: "http://terminology.hl7.org/CodeSystem/observation-category",
+            code: "vital-signs",
+            display: "Vital Signs"
+          }]
+        }],
+        code: {
+          coding: [{
+            system: "http://loinc.org",
+            code: "85354-9",
+            display: "Blood pressure panel with all children optional"
+          }],
+          text: "Krevní tlak"
+        },
+        subject: {
+          reference: "Patient/pac-karelnovot-19750320"
+        },
+        effectiveDateTime: "2024-07-25T10:30:00Z",
+        component: [
+          {
+            code: {
+              coding: [{"system": "http://loinc.org", "code": "8480-6", "display": "Systolic blood pressure"}],
+              text: "Systolický krevní tlak"
+            },
+            valueQuantity: {"value": 130, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]"}
+          },
+          {
+            code: {
+              coding: [{"system": "http://loinc.org", "code": "8462-4", "display": "Diastolic blood pressure"}],
+              text: "Diastolický krevní tlak"
+            },
+            valueQuantity: {"value": 85, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]"}
+          }
+        ]
+      }
+    }
+  ]
+};
+
 /**
  * Hlavní komponenta aplikace AI-FHIR.
  * Umožňuje nahrání textového nebo obrázkového souboru a zobrazení "extrahovaného" obsahu.
@@ -10,6 +85,13 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [extractedText, setExtractedText] = useState('');
   const [error, setError] = useState('');
+  const [fhirOutput, setFhirOutput] = useState(null); // New state variable
+
+  // New function to get simulated FHIR data
+  const getSimulatedFhirData = (textInput) => {
+    console.log("Simulating FHIR data generation for text:", textInput);
+    return sampleFhirBundle;
+  };
 
   /**
    * Simulovaná funkce pro extrakci textu nebo indikaci OCR zpracování.
@@ -45,6 +127,7 @@ function App() {
     const file = event.target.files[0];
     setError('');
     setExtractedText('');
+    setFhirOutput(null); // Reset FHIR output
     // setSelectedFile(null); // Reset selected file - toto způsobí, že se nezobrazí info o souboru, pokud je tato řádka zde
 
     if (file) {
@@ -56,23 +139,30 @@ function App() {
           const content = e.target.result;
           const processedText = simulateExtraction(content, file.type);
           setExtractedText(processedText);
+          const simulatedFhir = getSimulatedFhirData(processedText);
+          setFhirOutput(simulatedFhir);
         };
         reader.onerror = (e) => {
           console.error("Chybaři čtení textového souboru:", e);
           setError("Došlo k chybě při čtení textového souboru.");
           setSelectedFile(null); // Resetovat, pokud dojde k chybě čtení
+          setFhirOutput(null);
         };
         reader.readAsText(file);
       } else if (file.type.startsWith("image/")) {
         const processedText = simulateExtraction(null, file.type);
         setExtractedText(processedText);
+        const simulatedFhir = getSimulatedFhirData(processedText); // processedText here is the OCR simulation message
+        setFhirOutput(simulatedFhir);
       } else {
         setError("Prosím, nahrajte platný textový (.txt) nebo obrázkový (.png, .jpg, .jpeg) soubor.");
         setSelectedFile(null); // Resetovat, pokud typ souboru není podporován
+        setFhirOutput(null);
         event.target.value = null; // Reset file inputu, aby bylo možné znovu vybrat stejný (nesprávný) soubor
       }
     } else {
       setSelectedFile(null); // Pokud uživatel zruší výběr souboru
+      setFhirOutput(null); // Also reset if user cancels file selection
     }
   };
 
@@ -103,6 +193,14 @@ function App() {
           <section className="extracted-text-section">
             <h3>Výsledek zpracování:</h3>
             <pre>{extractedText}</pre>
+          </section>
+        )}
+
+        {/* New section for FHIR data */}
+        {fhirOutput && (
+          <section className="fhir-output-section">
+            <h3>Strukturovaná FHIR Data (Simulace):</h3>
+            <pre>{JSON.stringify(fhirOutput, null, 2)}</pre>
           </section>
         )}
       </main>
