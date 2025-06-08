@@ -65,14 +65,14 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 ### Fáze 1: Základy (Měsíce 1-2)
 - [x] Analýza požadavků a specifikace komponenty
 - [x] Návrh architektury komponenty
-- [ ] Vývoj základního AI modelu pro extrakci textu
-- [ ] Vytvoření základního uživatelského rozhraní pro nahrávání dokumentů
+- [x] Vývoj základního AI modelu pro extrakci textu (placeholder implementován)
+- [x] Vytvoření základního uživatelského rozhraní pro nahrávání dokumentů (React UI pro nahrávání a zobrazení textu)
 
 ### Fáze 2: Vývoj klíčových funkcí (Měsíce 3-4)
-- [ ] Implementace OCR pro zpracování naskenovaných dokumentů
-- [ ] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje
-- [ ] Integrace s DigiMedic Backend API
-- [ ] Rozšíření UI o vizualizaci strukturovaných dat
+- [x] Implementace OCR pro zpracování naskenovaných dokumentů (backendová část s Tesseract, frontendová simulace)
+- [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (základní Python mapper pro Patient a Observation)
+- [x] Integrace s DigiMedic Backend API (simulovaný Python klient)
+- [ ] Rozšíření UI o vizualizaci strukturovaných dat (probíhá implementace, cíl: zobrazit simulovaná FHIR data v UI)
 
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
 - [ ] Optimalizace AI modelů pro zvýšení přesnosti extrakce
@@ -82,10 +82,9 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
 - [ ] Komplexní testování komponenty
-- [ ] Integrace s produkčním prostředím DigiMedic
+- [ ] Integrace s produkčním prostředím DigiMedic (propojení frontendu s reálným backendem a API)
 - [ ] Tvorba uživatelské dokumentace
 - [ ] Příprava na nasazení
-
 ## Začínáme
 
 ### Předpoklady
@@ -131,4 +130,3 @@ Pro technické dotazy ohledně komponenty kontaktujte:
 ## Poděkování
 - Děkujeme týmu DigiMedic za poskytnutí robustní backendové infrastruktury a API.
 - FHIR® je registrovaná ochranná známka HL7 a je používána s povolením HL7.
-
