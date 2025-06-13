@@ -222,6 +222,24 @@ ${content.substring(0,100)}...`);
                     <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
                   </div>
                 )}
+                {/* --- Zobrazení Pozorování (Tělesná výška) --- */}
+                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná výška" && (
+                  <div className="observation-data">
+                    <h4>Pozorování: Tělesná výška (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
+                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
+                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
+                  </div>
+                )}
+                {/* --- Zobrazení Pozorování (Tělesná hmotnost) --- */}
+                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná hmotnost" && (
+                  <div className="observation-data">
+                    <h4>Pozorování: Tělesná hmotnost (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
+                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
+                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
+                  </div>
+                )}
                 {/* --- Zobrazení Diagnózy (Condition) --- */}
                 {entry.resource.resourceType === "Condition" && (
                   <div className="condition-data">
@@ -237,7 +255,9 @@ ${content.substring(0,100)}...`);
                  !(entry.resource.resourceType === "Observation" &&
                    (entry.resource.code?.text === "Krevní tlak" ||
                     entry.resource.code?.text === "Pulz" ||
-                    entry.resource.code?.text === "Tělesná teplota")) &&
+                    entry.resource.code?.text === "Tělesná teplota" ||
+                    entry.resource.code?.text === "Tělesná výška" ||
+                    entry.resource.code?.text === "Tělesná hmotnost")) &&
                  entry.resource.resourceType !== "Condition" && (
                     <div>
                         <h4>Resource: {entry.resource.resourceType} (ID: {entry.resource.id || 'N/A'}) - Obecné zobrazení</h4>

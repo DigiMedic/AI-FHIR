@@ -70,15 +70,24 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 
 ### Fáze 2: Vývoj klíčových funkcí (Měsíce 3-4)
 - [x] Implementace OCR pro zpracování naskenovaných dokumentů (backendová část s Tesseract, frontendová simulace)
-- [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (Python mapper pro Patient [včetně RČ], Observation [krevní tlak, pulz, teplota] a Condition [diagnóza])
+- [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (Python mapper pro Patient [včetně RČ], Observation [krevní tlak, pulz, teplota, výška, váha] a Condition [diagnóza])
 - [x] Integrace s DigiMedic Backend API (simulovaný Python klient)
-- [x] Rozšíření UI o vizualizaci strukturovaných dat (probíhá implementace, cíl: zobrazit simulovaná FHIR data v UI)
+- [x] Rozšíření UI o vizualizaci strukturovaných dat (Patient, Observation - TK, pulz, teplota, výška, váha, Condition).
 
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
-- [ ] Optimalizace AI modelů pro zvýšení přesnosti extrakce
-- [ ] Implementace pokročilých funkcí pro validaci a korekci dat
-- [ ] Vylepšení uživatelského rozhraní na základě zpětné vazby
-- [ ] Výkonnostní optimalizace a testování
+- [ ] **Integrace NLP modelu pro extrakci entit:**
+    - [ ] Výběr a testování předtrénovaného NLP modelu (např. pro češtinu ze spaCy/Hugging Face).
+    - [ ] Návrh a implementace hybridního přístupu (kombinace NLP a stávajících regexů).
+    - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
+- [ ] **Pokročilá validace a návrh korekce dat:**
+    - [ ] Rozšíření validace extrahovaných dat (např. RČ vs datum narození, fyziologické rozsahy).
+    - [ ] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI.
+- [ ] **Vylepšení UI/UX:**
+    - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
+    - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů.
+- [ ] **Formalizace testování a výkonnostní optimalizace:**
+    - [ ] Zavedení jednotkových a integračních testů pomocí testovacího frameworku (např. pytest pro backend, Jest/RTL pro frontend).
+    - [ ] Profilování a optimalizace kritických částí aplikace (OCR, FHIR mapování).
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
 - [ ] Komplexní testování komponenty
