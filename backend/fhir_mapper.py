@@ -14,13 +14,16 @@ import unicodedata # Potřebné pro odstranění diakritiky
 # - Následuje dvojtečka a mezery.
 # - Zachytává jméno a příjmení (případně více jmen/příjmení, včetně těch s pomlčkou).
 # - Jména začínají velkým písmenem, ostatní písmena jsou malá (včetně české diakritiky).
-REGEX_PATIENT_NAME = r"(?:Pacient(?:ka)?|Jméno pacienta|Vyšetřovan(?:ý|á))\s*:\s*([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+(?:-[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)?(?:\s+[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+(?:-[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)?)+)"
+# - Upraveno tak, aby končilo před dalším klíčovým slovem jako "Datum narození", "Nar." atd., nebo před novým řádkem, pokud za ním nenásleduje další část jména.
+REGEX_PATIENT_NAME = r"(?:Pacient(?:ka)?|Jméno pacienta|Vyšetřovan(?:ý|á))\s*:\s*([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+(?:-[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)?(?:\s+[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+(?:-[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)?)*)(?=\s*(?:Datum narození|Nar\.|Narozena|Dat\. nar\.|Narozen\(a\)|R(?:odné|\.č\.)|Bydliště|Poznámka|---|$))"
 
 # Regex pro datum narození:
 # - Hledá klíčová slova jako "Datum narození", "Nar.", "Narozena", "Dat. nar.", "Narozen(a)".
 # - Následuje dvojtečka a mezery.
-# - Zachytává datum ve formátu DD.MM.YYYY, DD/MM/YYYY nebo DD MM YYYY (s různými oddělovači).
-REGEX_BIRTH_DATE = r"(?:Datum narození|Nar\.|Narozena|Dat\. nar\.|Narozen\(a\))\s*:\s*(\d{1,2}[\.\/\s]+\d{1,2}[\.\/\s]+\d{4})"
+# - Zachytává datum ve formátu DD.MM.YYYY, DD/MM/YYYY, DD MM YYYY, nebo textové měsíce (např. "1. ledna 1955").
+# - Upraveno pro flexibilnější zachycení data: vezme zbytek řádku po klíčovém slově.
+#   Čištění se provádí v parse_patient_data.
+REGEX_BIRTH_DATE = r"(?:Datum narození|Nar\.|Narozena|Dat\. nar\.|Narozen\(a\))\s*:\s*([^\n\r]+)"
 
 # Regex pro rodné číslo:
 # - Hledá klíčová slova jako "Rodné číslo", "RČ", "R.č.".
@@ -70,9 +73,7 @@ REGEX_WEIGHT = r"(?:Hmotnost|Hm\.|Váha)\s*:\s*(\d{1,3}(?:[\.,]\d{1,2})?)\s*(kg)
 # - Ukončovací tokeny zahrnují prázdné řádky, "Poznámka:", "Medikace:", "Doporučení:", atd.,
 #   aby se zabránilo zachycení příliš velkého bloku textu.
 # - Používá re.DOTALL, aby tečka (.) zahrnovala i nové řádky.
-REGEX_DIAGNOSIS_TEXT = r"(?:Diagnóza|Dg\.|Závěr)\s*:\s*(.+?)(?:
-\s*
-|\Z|Poznámka:|Medikace:|Doporučení:|Terapie:|Výška:|Hmotnost:|Kontrola:|Prognóza:)"
+REGEX_DIAGNOSIS_TEXT = r"(?:Diagnóza|Dg\.|Závěr)\s*:\s*(.+?)(?:\s*\n\s*|\Z|Poznámka:|Medikace:|Doporučení:|Terapie:|Výška:|Hmotnost:|Kontrola:|Prognóza:)"
 
 
 # --- Pomocné (Helper) funkce pro parsování ---
@@ -298,13 +299,35 @@ def parse_patient_data(text: str) -> dict:
     birth_date_match = re.search(REGEX_BIRTH_DATE, text, re.IGNORECASE)
     if birth_date_match:
         raw_date = birth_date_match.group(1).strip()
-        print(f"DEBUG [FHIR Mapper]: Nalezen řetězec data narození: '{raw_date}'")
+        print(f"DEBUG [FHIR Mapper]: Nalezen surový řetězec data narození (před čištěním): '{raw_date}'")
+
+        # Dodatečné oříznutí, pokud raw_date obsahuje další klíčová slova, která by neměla být součástí data
+        # Toto řeší případy, kdy REGEX_BIRTH_DATE zachytí více textu, než je samotné datum
+        # (např. pokud RČ následuje na stejném řádku hned za datem).
+        stop_keywords = [
+            "RČ", "R.č.", "Rodné číslo",
+            "Pojišťovna", "Poj.",
+            "Bydliště", "Bydl.",
+            "Kontakt", "Tel.",
+            "Oddělení", "Odd.",
+            "Status",
+            "Poznámka", "Pozn.",
+            "---"
+        ]
+        for keyword in stop_keywords:
+            # Použijeme re.split pro case-insensitive dělení a vezmeme první část
+            parts = re.split(r'\b' + re.escape(keyword) + r'\b', raw_date, maxsplit=1, flags=re.IGNORECASE)
+            if len(parts) > 1: # Pokud byl keyword nalezen a došlo k rozdělení
+                raw_date = parts[0].strip()
+                print(f"DEBUG [FHIR Mapper]: Řetězec data narození oříznut klíčovým slovem '{keyword}': '{raw_date}'")
+
+        print(f"DEBUG [FHIR Mapper]: Nalezen řetězec data narození (po čištění): '{raw_date}'")
         patient_data["birth_date_fhir"] = parse_date_to_fhir_format(raw_date)
         if not patient_data["birth_date_fhir"]:
             patient_data["birth_date_raw"] = raw_date # Uložíme původní, pokud parsování selhalo
-            print(f"DEBUG [FHIR Mapper]: Datum narození se nepodařilo převést do FHIR formátu, uloženo raw: '{raw_date}'")
+            print(f"DEBUG [FHIR Mapper]: Datum narození '{raw_date}' se nepodařilo převést do FHIR formátu, uloženo raw.")
         else:
-            print(f"DEBUG [FHIR Mapper]: Datum narození převedeno do FHIR formátu: {patient_data['birth_date_fhir']}")
+            print(f"DEBUG [FHIR Mapper]: Datum narození '{raw_date}' převedeno do FHIR formátu: {patient_data['birth_date_fhir']}")
 
     # Extrakce rodného čísla
     birth_number_match = re.search(REGEX_BIRTH_NUMBER, text, re.IGNORECASE)
@@ -1003,6 +1026,56 @@ if __name__ == '__main__':
     Diagnóza: Syndrom nevalidních dat.
     """
 
+    sample_text_height_weight_1 = """
+    Pacient: Testovací Subjekt VýškaVáha
+    Datum narození: 01.01.1990
+    RČ: 900101/1234
+    ---
+    Subjektivní potíže: Žádné.
+    Objektivní nález:
+    Krevní tlak: 125/85 mmHg
+    Pulz: 60/min
+    Teplota: 36.6 C
+    Výška: 175.5 cm
+    Hmotnost: 68.2 kg
+    ---
+    Diagnóza: Zdráv.
+    """
+
+    sample_text_height_weight_2 = """
+    Jméno pacienta: Druhý Testovací Subjekt
+    Dat. nar.: 02.02.1985
+    RČ: 850202/5678
+    ---
+    Výš.: 160,5 cm
+    Hm.: 70,0 kg
+    TK: 130/80
+    SF: 75 /min.
+    T: 37,0C
+    Závěr: Lehce zvýšený TK.
+    """
+
+    sample_text_height_weight_3 = """
+    Pacientka: Třetí Subjektová
+    Narozena: 03.03.1977
+    R.č.: 775303/7890
+    ---
+    Výška: 165
+    Váha: 65
+    (Jednotky neuvedeny, očekává se cm a kg)
+    Teplota: 36.5
+    Pulz: 58
+    Diagnóza: Bez pozoruhodností.
+    """
+
+    sample_text_height_weight_4 = """
+    Pacient: Josef Novák
+    Narozen: 10.10.1960
+    Výška: 181 cm, Hmotnost: 95.3kg, TK: 140/92, Puls: 72/min.
+    Závěr: Hypertenze.
+    """
+
+
     test_texts = {
         "Komplexní zpráva 1": sample_text_1,
         "Komplexní zpráva 2": sample_text_2,
@@ -1019,6 +1092,10 @@ if __name__ == '__main__':
         "ISO Datum s lomítky": "Pacient: Test ISO Lomítka\nNar.: 2022/11/05",
         "Neplatné ISO Datum (měsíc)": "Pacient: Test ISO Měsíc\nNar.: 2023-13-01",
         "Neplatné ISO Datum (den)": "Pacient: Test ISO Den\nNar.: 2023-02-30",
+        "Zpráva s výškou a hmotností (des. tečka)": sample_text_height_weight_1,
+        "Zpráva s výškou a hmotností (des. čárka, různé klíč. slova)": sample_text_height_weight_2,
+        "Zpráva s výškou a hmotností (bez jednotek)": sample_text_height_weight_3,
+        "Zpráva s výškou a hmotností (jedna řádka, zkratky)": sample_text_height_weight_4,
     }
 
     for test_name, sample_text_or_date_string in test_texts.items():
