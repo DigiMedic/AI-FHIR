@@ -70,7 +70,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 
 ### Fáze 2: Vývoj klíčových funkcí (Měsíce 3-4)
 - [x] Implementace OCR pro zpracování naskenovaných dokumentů (backendová část s Tesseract, frontendová simulace)
-- [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (základní Python mapper pro Patient a Observation)
+- [x] Vývoj logiky pro mapování extrahovaných dat na FHIR zdroje (Python mapper pro Patient [včetně RČ], Observation [krevní tlak, pulz, teplota] a Condition [diagnóza])
 - [x] Integrace s DigiMedic Backend API (simulovaný Python klient)
 - [x] Rozšíření UI o vizualizaci strukturovaných dat (probíhá implementace, cíl: zobrazit simulovaná FHIR data v UI)
 
