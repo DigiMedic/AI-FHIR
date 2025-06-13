@@ -4,185 +4,149 @@ import './App.css';
 
 /**
  * Hlavní komponenta aplikace AI-FHIR.
- * Umožňuje nahrání textového nebo obrázkového souboru a zobrazení "extrahovaného" obsahu.
+ * Umožňuje nahrání textového nebo obrázkového souboru,
+ * odeslání na backend pro zpracování (včetně OCR pro obrázky)
+ * a zobrazení výsledných FHIR dat, včetně nově přidaných diagnóz (Condition).
  */
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
-  const [extractedText, setExtractedText] = useState('');
+  const [extractedTextFromBackend, setExtractedTextFromBackend] = useState('');
   const [error, setError] = useState('');
   const [fhirOutput, setFhirOutput] = useState(null);
-  const [isLoadingFhir, setIsLoadingFhir] = useState(false); // State for loading indicator
+  const [isLoading, setIsLoading] = useState(false);
 
 
-  // New function to fetch FHIR data from backend
-  const fetchFhirDataFromBackend = async (textInput) => {
-    console.log("Requesting FHIR data from backend for text:", textInput);
-    setIsLoadingFhir(true);
-    setError(''); // Clear previous errors specifically for FHIR fetching
+  const handleFileChange = async (event) => {
+    const file = event.target.files[0];
+    setError('');
+    setExtractedTextFromBackend('');
+    setFhirOutput(null);
+    setSelectedFile(null);
+
+    if (!file) {
+      return;
+    }
+
+    setSelectedFile(file);
+    setIsLoading(true);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
     try {
-      const response = await fetch('http://localhost:8000/api/process_text', {
+      console.log(`Odesílání souboru ${file.name} (${file.type}) na backend...`);
+      const response = await fetch('http://localhost:8000/api/process_document', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: textInput }),
+        body: formData,
       });
 
       if (!response.ok) {
-        // Try to get error message from backend response body
         let errorMsg = `Chyba při komunikaci s backendem: ${response.status} ${response.statusText}`;
         try {
             const errorData = await response.json();
-            errorMsg = errorData.detail || errorMsg;
+            if (errorData && errorData.detail) {
+                 errorMsg = `Chyba z backendu: ${errorData.detail}`;
+            } else if (Array.isArray(errorData) && errorData.length === 0 && response.status !== 200) {
+                errorMsg = `Backend vrátil neočekávanou prázdnou odpověď se statusem ${response.status}.`;
+            }
         } catch (e) {
-            // Ignore if response is not JSON or empty
+            console.warn("Nepodařilo se parsovat chybovou JSON odpověď z backendu:", e);
         }
         throw new Error(errorMsg);
       }
 
       const resources = await response.json();
+      console.log("Přijata data z backendu:", resources);
+
+      if (file.type.startsWith("image/")) {
+        setExtractedTextFromBackend(`[OBRÁZEK ZPRACOVÁN BACKENDEM]: ${file.name} (OCR provedeno na serveru)`);
+      } else if (file.type === "text/plain") {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target.result;
+            setExtractedTextFromBackend(`[TEXTOVÝ SOUBOR ZPRACOVÁN BACKENDEM]: ${file.name}
+Obsah (prvních 100 znaků):
+${content.substring(0,100)}...`);
+        };
+        reader.readAsText(file.slice(0, 100));
+      }
 
       if (!resources || resources.length === 0) {
         console.log("Backend vrátil prázdná nebo žádná FHIR data.");
-        setFhirOutput({ // Set fhirOutput to indicate no data, but not an error
+        setFhirOutput({
             resourceType: "Bundle",
             id: "bundle-empty-from-backend",
             type: "collection",
             entry: []
         });
-        return null; // Explicitly return null or an empty bundle structure
+      } else {
+        const bundle = {
+          resourceType: "Bundle",
+          id: "bundle-from-backend",
+          type: "collection",
+          entry: resources.map(resource => ({
+            fullUrl: `${resource.resourceType}/${resource.id}`,
+            resource: resource
+          }))
+        };
+        setFhirOutput(bundle);
       }
-
-      const bundle = {
-        resourceType: "Bundle",
-        id: "bundle-from-backend",
-        type: "collection",
-        entry: resources.map(resource => ({
-          fullUrl: `${resource.resourceType}/${resource.id}`,
-          resource: resource
-        }))
-      };
-      return bundle;
 
     } catch (err) {
-      console.error("Chyba při získávání FHIR dat z backendu:", err);
-      setError(`Chyba při získávání FHIR dat: ${err.message}`);
-      setFhirOutput(null); // Clear FHIR output on error
-      return null; // Ensure null is returned on error
-    } finally {
-      setIsLoadingFhir(false);
-    }
-  };
-
-
-  /**
-   * Simulovaná funkce pro extrakci textu nebo indikaci OCR zpracování.
-   * @param {string} documentContent Obsah textového dokumentu nebo null pro obrázky.
-   * @param {string} fileType Typ souboru ('text/plain', 'image/png', atd.).
-   * @returns {string} "Extrahovaný" text nebo zpráva o OCR.
-   */
-  const simulateExtraction = (documentContent, fileType) => {
-    // Musíme přistupovat k selectedFile přes stav, protože v momentě volání této funkce
-    // nemusí být selectedFile v argumentu funkce aktuální, pokud se volá zevnitř jiné callback funkce.
-    // Nicméně, pro jednoduchost zde ponecháme původní logiku, ale v reálné aplikaci by to mohlo vyžadovat úpravu.
-    const currentFileName = selectedFile ? selectedFile.name : 'vybraný soubor';
-
-    if (fileType === "text/plain") {
-      if (typeof documentContent !== 'string') {
-        console.error("Chyba: Vstupní dokument pro textovou extrakci musí být řetězec.");
-        return "Chyba při zpracování: Vstupní dokument není text.";
-      }
-      const lowerCaseText = documentContent.toLowerCase();
-      return `[ZÁKLADNÍ TEXTOVÁ EXTRAKCE JS]:\n${lowerCaseText}`;
-    } else if (fileType && fileType.startsWith("image/")) {
-      return `[SIMULACE OCR]: Soubor '${currentFileName}' by byl odeslán na server k OCR zpracování.\n(Skutečné OCR proběhne na backendu.)`;
-    } else {
-      return "Neznámý typ souboru pro extrakci nebo soubor nebyl správně detekován.";
-    }
-  };
-
-  /**
-   * Handler pro změnu ve file inputu.
-   * Zpracuje nahraný soubor a spustí simulovanou extrakci.
-   */
-  const handleFileChange = async (event) => { // handleFileChange is now async
-    const file = event.target.files[0];
-    setError('');
-    setExtractedText('');
-    setFhirOutput(null);
-
-    if (file) {
-      setSelectedFile(file);
-
-      let textForFhirProcessing = '';
-
-      if (file.type === "text/plain") {
-        try {
-            const content = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.onerror = (e) => {
-                    console.error("Chyba při čtení textového souboru:", e);
-                    setError("Došlo k chybě při čtení textového souboru.");
-                    reject(new Error("Chyba při čtení souboru"));
-                };
-                reader.readAsText(file);
-            });
-            textForFhirProcessing = simulateExtraction(content, file.type);
-            setExtractedText(textForFhirProcessing);
-        } catch (readError) {
-            setSelectedFile(null);
-            setFhirOutput(null);
-            // Error already set by reader.onerror
-            return; // Stop processing
-        }
-      } else if (file.type.startsWith("image/")) {
-        textForFhirProcessing = simulateExtraction(null, file.type);
-        setExtractedText(textForFhirProcessing);
-      } else {
-        setError("Prosím, nahrajte platný textový (.txt) nebo obrázkový (.png, .jpg, .jpeg) soubor.");
-        setSelectedFile(null);
-        setFhirOutput(null);
-        event.target.value = null;
-        return; // Stop processing
-      }
-
-      // Fetch FHIR data from backend if text was successfully extracted/simulated
-      if (textForFhirProcessing) {
-        const backendFhirData = await fetchFhirDataFromBackend(textForFhirProcessing);
-        if (backendFhirData) {
-            setFhirOutput(backendFhirData);
-        } else if (!error) { // If fetchFhirDataFromBackend returned null but didn't set an error (e.g. empty resources)
-            // Ensure fhirOutput is set to something that indicates no data, if not already handled by fetchFhirDataFromBackend
-             if (!fhirOutput) { // Check if fhirOutput wasn't set by fetchFhirDataFromBackend
-                setFhirOutput({
-                    resourceType: "Bundle", id: "bundle-no-data-after-fetch", type: "collection", entry: []
-                });
-            }
-        }
-      }
-
-    } else {
-      setSelectedFile(null);
+      console.error("Chyba při odesílání souboru nebo zpracování odpovědi z backendu:", err);
+      setError(`Chyba při zpracování souboru: ${err.message}`);
       setFhirOutput(null);
+    } finally {
+      setIsLoading(false);
+      if (event && event.target) {
+          event.target.value = null;
+      }
     }
   };
+
+  // Helper funkce pro formátování data a času
+  const formatFhirDateTime = (dateTimeString) => {
+    if (!dateTimeString) return 'N/A';
+    try {
+      // Zkusíme parsovat jako plné ISO datum a čas
+      const date = new Date(dateTimeString);
+      if (isNaN(date.getTime())) { // Pokud je neplatné, zkusíme jen jako datum (YYYY-MM-DD)
+          const parts = dateTimeString.split('-');
+          if (parts.length === 3) {
+              const year = parseInt(parts[0]);
+              const month = parseInt(parts[1]) -1; // Měsíce jsou 0-indexované v JS Date
+              const day = parseInt(parts[2]);
+              const simpleDate = new Date(year, month, day);
+               if (!isNaN(simpleDate.getTime())) {
+                   return simpleDate.toLocaleDateString('cs-CZ');
+               }
+          }
+          return dateTimeString; // Vrátit původní string, pokud ani to nepomůže
+      }
+      return date.toLocaleString('cs-CZ');
+    } catch (e) {
+      console.warn("Chyba při formátování data:", dateTimeString, e);
+      return dateTimeString; // V případě chyby vrátit původní řetězec
+    }
+  };
+
 
   return (
     <div className="App">
       <header className="App-header">
         <h1>AI-FHIR Komponenta</h1>
         <p>Nástroj pro strukturování zdravotních dat do FHIR formátu.</p>
+        <p>Nahrajte .txt nebo obrázek (.png, .jpg, .jpeg).</p>
       </header>
       <main>
         <section className="upload-section">
           <h2>Nahrání dokumentu</h2>
-          <p>Vyberte textový (.txt) nebo obrázkový (.png, .jpg, .jpeg) soubor pro zpracování:</p>
-          <input type="file" accept=".txt,image/png,image/jpeg,image/jpg" onChange={handleFileChange} />
+          <input type="file" accept=".txt,image/png,image/jpeg,image/jpg" onChange={handleFileChange} disabled={isLoading} />
+          {isLoading && <p className="loading-message">Zpracovávám soubor, prosím čekejte...</p>}
           {error && <p className="error-message">{error}</p>}
         </section>
 
-        {selectedFile && (
+        {selectedFile && !isLoading && (
           <section className="file-info-section">
             <h3>Informace o nahraném souboru:</h3>
             <p><strong>Název:</strong> {selectedFile.name}</p>
@@ -191,81 +155,84 @@ function App() {
           </section>
         )}
 
-        {extractedText && (
+        {extractedTextFromBackend && !isLoading && (
           <section className="extracted-text-section">
-            <h3>Výsledek zpracování:</h3>
-            <pre>{extractedText}</pre>
+            <h3>Stav zpracování souboru:</h3>
+            <pre>{extractedTextFromBackend}</pre>
           </section>
         )}
 
-        {isLoadingFhir && (
-            <section className="loading-fhir-section">
-                <p>Zpracovávám data a generuji FHIR...</p>
-            </section>
-        )}
-
-        {fhirOutput && fhirOutput.entry && fhirOutput.entry.length > 0 ? (
+        {fhirOutput && !isLoading && fhirOutput.entry && fhirOutput.entry.length > 0 ? (
           <section className="fhir-output-section">
             <h3>Strukturovaná FHIR Data (z Backendu):</h3>
             {fhirOutput.entry.map((entry, index) => (
               <div key={index} className="fhir-resource" style={{ marginBottom: '15px', padding: '10px', border: '1px solid #eee' }}>
+                {/* --- Zobrazení Pacienta --- */}
                 {entry.resource.resourceType === "Patient" && (
                   <div className="patient-data">
-                    <h4>Pacient</h4>
-                    <p><strong>Jméno:</strong> {entry.resource.name?.[0]?.given?.join(' ') || ''} {entry.resource.name?.[0]?.family || 'N/A'}</p>
-                    <p><strong>Datum narození:</strong> {entry.resource.birthDate || 'N/A'}</p>
+                    <h4>Pacient (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Jméno:</strong> {entry.resource.name?.[0]?.text || `${entry.resource.name?.[0]?.given?.join(' ') || ''} ${entry.resource.name?.[0]?.family || ''}`.trim() || 'N/A'}</p>
+                    <p><strong>Datum narození:</strong> {formatFhirDateTime(entry.resource.birthDate)}</p>
                   </div>
                 )}
-                {entry.resource.resourceType === "Observation" && (
+                {/* --- Zobrazení Pozorování (Krevní tlak) --- */}
+                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Krevní tlak" && (
                   <div className="observation-data">
-                    <h4>Pozorování: Krevní tlak</h4>
-                    <p><strong>Datum a čas měření:</strong> {entry.resource.effectiveDateTime ? new Date(entry.resource.effectiveDateTime).toLocaleString('cs-CZ') : 'N/A'}</p>
+                    <h4>Pozorování: Krevní tlak (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
                     {
                       (() => {
                         const systolicComp = entry.resource.component?.find(comp => comp.code?.coding?.[0]?.code === "8480-6");
                         const diastolicComp = entry.resource.component?.find(comp => comp.code?.coding?.[0]?.code === "8462-4");
-                        let componentsFound = false;
-
                         const renderedComponents = [];
 
                         if (systolicComp) {
-                          componentsFound = true;
                           renderedComponents.push(
                             <p key="systolic"><strong>Systolický tlak:</strong> {systolicComp.valueQuantity?.value} {systolicComp.valueQuantity?.unit || 'N/A'}</p>
                           );
                         }
                         if (diastolicComp) {
-                          componentsFound = true;
                           renderedComponents.push(
                             <p key="diastolic"><strong>Diastolický tlak:</strong> {diastolicComp.valueQuantity?.value} {diastolicComp.valueQuantity?.unit || 'N/A'}</p>
                           );
                         }
-
-                        if (!componentsFound && entry.resource.component?.length > 0) {
-                           renderedComponents.push(<p key="no_bp_data">Specifické komponenty pro systolický/diastolický tlak nebyly nalezeny.</p>);
-                        } else if (!componentsFound) {
-                           renderedComponents.push(<p key="no_components">Žádné komponenty měření k zobrazení.</p>);
+                        if (renderedComponents.length === 0) {
+                           renderedComponents.push(<p key="no_bp_data">Specifické komponenty pro krevní tlak nebyly nalezeny.</p>);
                         }
                         return renderedComponents;
                       })()
                     }
                   </div>
                 )}
-                 {/* Basic display for other resource types */}
-                {entry.resource.resourceType !== "Patient" && entry.resource.resourceType !== "Observation" && (
+                {/* --- Zobrazení Diagnózy (Condition) --- */}
+                {entry.resource.resourceType === "Condition" && (
+                  <div className="condition-data">
+                    <h4>Diagnóza (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Text diagnózy:</strong> {entry.resource.code?.text || 'N/A'}</p>
+                    <p><strong>Datum záznamu:</strong> {formatFhirDateTime(entry.resource.recordedDate)}</p>
+                    <p><strong>Klinický stav:</strong> {entry.resource.clinicalStatus?.coding?.[0]?.display || entry.resource.clinicalStatus?.coding?.[0]?.code || 'N/A'}</p>
+                    <p><strong>Stav ověření:</strong> {entry.resource.verificationStatus?.coding?.[0]?.display || entry.resource.verificationStatus?.coding?.[0]?.code || 'N/A'}</p>
+                  </div>
+                )}
+                {/* --- Generické zobrazení pro ostatní typy zdrojů --- */}
+                {entry.resource.resourceType !== "Patient" &&
+                 !(entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Krevní tlak") &&
+                 entry.resource.resourceType !== "Condition" && (
                     <div>
-                        <h4>{entry.resource.resourceType}</h4>
-                        <pre>{JSON.stringify(entry.resource, null, 2)}</pre>
+                        <h4>Resource: {entry.resource.resourceType} (ID: {entry.resource.id || 'N/A'})</h4>
+                        <pre style={{maxHeight: '200px', overflowY: 'auto', backgroundColor: '#f5f5f5', border: '1px solid #ddd', padding: '5px'}}>
+                            {JSON.stringify(entry.resource, null, 2)}
+                        </pre>
                     </div>
                 )}
               </div>
             ))}
           </section>
         ) : (
-          fhirOutput && // Show this section only if fhirOutput is not null, but might have empty entry
+          fhirOutput && !isLoading &&
           <section className="fhir-output-section">
             <h3>Strukturovaná FHIR Data (z Backendu):</h3>
-            <p>Žádná strukturovaná FHIR data nebyla vygenerována nebo nalezena z backendu.</p>
+            <p>Žádná strukturovaná FHIR data nebyla vygenerována nebo nalezena z backendu pro nahraný soubor.</p>
           </section>
         )}
       </main>
