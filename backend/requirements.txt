@@ -1,3 +1,12 @@
+# backend/requirements.txt
+# Tento soubor obsahuje seznam Python závislostí pro backendovou část projektu.
+# Pro instalaci použijte: pip install -r requirements.txt
+
+# Příklad závislosti (pokud by zde nějaké byly):
+# requests==2.25.1
 Pillow>=9.0.0
 pytesseract>=0.3.0
 requests>=2.25.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+pydantic>=2.0
