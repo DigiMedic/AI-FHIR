@@ -1,5 +1,6 @@
 # backend/ai_models/text_extractor.py
 import os
+import re
 try:
     from PIL import Image
 except ImportError:
@@ -37,7 +38,14 @@ def extract_text_from_document(document_input, input_type="text", lang='ces+eng'
         if not isinstance(document_input, str):
             raise TypeError("Pro input_type='text' musí být vstupní dokument řetězec.")
 
-        extracted_text = document_input.lower()
+        # Předzpracování textu
+        text = document_input.strip() # Odstranění úvodních/koncových bílých znaků
+        text = re.sub(r'\r\n', '\n', text) # Nahradí Windows konce řádků (CRLF) Unixovými (LF)
+        text = re.sub(r'\r', '\n', text)   # Nahradí staré Mac konce řádků (CR) Unixovými (LF)
+        text = re.sub(r'[ \t]+', ' ', text) # Nahradí vícenásobné mezery nebo tabulátory jednou mezerou
+        text = text.lower() # Převod na malá písmena
+
+        extracted_text = text
         processed_text = f"[TEXTOVÁ EXTRAKCE]:\n{extracted_text}"
         print(f"DEBUG: Výsledek textové extrakce: '{processed_text[:100]}...'")
         return processed_text
@@ -67,8 +75,8 @@ def extract_text_from_document(document_input, input_type="text", lang='ces+eng'
         raise ValueError(f"Neznámý input_type: {input_type}. Použijte 'text' nebo 'image_path'.")
 
 if __name__ == '__main__':
-    sample_text = "Toto je VZOROVÝ text pro Testování."
-    print(f"Původní text:\n{sample_text}\n")
+    sample_text = "  Toto  je   VZOROVÝ text  \r\n  pro  Testování.  \r\r   Konec.  "
+    print(f"Původní text:\n'{sample_text}'\n") # Přidány apostrofy pro jasné zobrazení mezer
     extracted_direct = extract_text_from_document(sample_text, input_type="text")
     print(f"Extrahovaný text (přímý vstup):\n{extracted_direct}\n")
 

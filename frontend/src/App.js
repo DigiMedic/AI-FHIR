@@ -204,6 +204,24 @@ ${content.substring(0,100)}...`);
                     }
                   </div>
                 )}
+                {/* --- Zobrazení Pozorování (Pulz) --- */}
+                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Pulz" && (
+                  <div className="observation-data">
+                    <h4>Pozorování: Pulz (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
+                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
+                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
+                  </div>
+                )}
+                {/* --- Zobrazení Pozorování (Tělesná teplota) --- */}
+                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná teplota" && (
+                  <div className="observation-data">
+                    <h4>Pozorování: Tělesná teplota (ID: {entry.resource.id || 'N/A'})</h4>
+                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
+                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
+                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
+                  </div>
+                )}
                 {/* --- Zobrazení Diagnózy (Condition) --- */}
                 {entry.resource.resourceType === "Condition" && (
                   <div className="condition-data">
@@ -216,10 +234,13 @@ ${content.substring(0,100)}...`);
                 )}
                 {/* --- Generické zobrazení pro ostatní typy zdrojů --- */}
                 {entry.resource.resourceType !== "Patient" &&
-                 !(entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Krevní tlak") &&
+                 !(entry.resource.resourceType === "Observation" &&
+                   (entry.resource.code?.text === "Krevní tlak" ||
+                    entry.resource.code?.text === "Pulz" ||
+                    entry.resource.code?.text === "Tělesná teplota")) &&
                  entry.resource.resourceType !== "Condition" && (
                     <div>
-                        <h4>Resource: {entry.resource.resourceType} (ID: {entry.resource.id || 'N/A'})</h4>
+                        <h4>Resource: {entry.resource.resourceType} (ID: {entry.resource.id || 'N/A'}) - Obecné zobrazení</h4>
                         <pre style={{maxHeight: '200px', overflowY: 'auto', backgroundColor: '#f5f5f5', border: '1px solid #ddd', padding: '5px'}}>
                             {JSON.stringify(entry.resource, null, 2)}
                         </pre>
