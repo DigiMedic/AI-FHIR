@@ -15,3 +15,7 @@ yarn-error.log*
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Dočasné soubory pro upload
+backend/temp_uploads/
+temp_uploads/
