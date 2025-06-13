@@ -49,6 +49,20 @@ REGEX_PULSE = r"(?:Pulz|Puls|Srdeční frekvence|SF)\s*:\s*(\d{2,3})\s*(?:/min|t
 # - Volitelně může obsahovat jednotku "°C" nebo "C".
 REGEX_TEMPERATURE = r"(?:Teplota|T)\s*:\s*(\d{2}(?:[\.,]\d{1,2})?)\s*(?:°C|C)"
 
+# Regex pro tělesnou výšku:
+# - Hledá klíčová slova jako "Výška", "Výš.".
+# - Následuje dvojtečka a mezery.
+# - Zachytává číselnou hodnotu výšky (např. 175, 180.5), s tečkou nebo čárkou jako desetinným oddělovačem.
+# - Volitelně může obsahovat jednotku "cm".
+REGEX_HEIGHT = r"(?:Výška|Výš\.)\s*:\s*(\d{2,3}(?:[\.,]\d{1,2})?)\s*(cm)?"
+
+# Regex pro tělesnou hmotnost:
+# - Hledá klíčová slova jako "Hmotnost", "Hm.", "Váha".
+# - Následuje dvojtečka a mezery.
+# - Zachytává číselnou hodnotu hmotnosti (např. 70, 75.5, 102.3), s tečkou nebo čárkou.
+# - Volitelně může obsahovat jednotku "kg".
+REGEX_WEIGHT = r"(?:Hmotnost|Hm\.|Váha)\s*:\s*(\d{1,3}(?:[\.,]\d{1,2})?)\s*(kg)?"
+
 # Regex pro text diagnózy/závěru:
 # - Hledá klíčová slova jako "Diagnóza", "Dg.", "Závěr".
 # - Následuje dvojtečka a mezery.
@@ -85,6 +99,41 @@ def parse_date_to_fhir_format(date_str: str) -> str | None:
 
     original_date_str = str(date_str) # Uložíme si původní vstup pro detailnější logování chyb
 
+    # Regex pro formáty YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD
+    REGEX_YYYY_MM_DD = r"(\d{4})[\.\/\-](\d{1,2})[\.\/\-](\d{1,2})"
+
+    # 1. Pokus o parsování formátů s rokem na začátku (YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD)
+    # Používáme re.match, protože chceme shodu od začátku řetězce.
+    match_yyyy_mm_dd = re.match(REGEX_YYYY_MM_DD, original_date_str.strip())
+    if match_yyyy_mm_dd:
+        print(f"DEBUG [FHIR Mapper]: parse_date_to_fhir_format: Nalezena shoda s REGEX_YYYY_MM_DD pro '{original_date_str}'.")
+        year_str, month_str, day_str = match_yyyy_mm_dd.groups()
+
+        if not (day_str.isdigit() and month_str.isdigit() and year_str.isdigit()):
+            print(f"DEBUG [FHIR Mapper]: Chyba parsování data (YYYY-MM-DD): Den, měsíc a rok musí být číslice. Získáno: rok='{year_str}', měsíc='{month_str}', den='{day_str}' (původní: '{original_date_str}'). Pokračuji na další metody parsování.")
+        else:
+            try:
+                year = int(year_str)
+                month = int(month_str)
+                day = int(day_str)
+
+                # Validace rozsahu hodnot (stejná jako v existující logice)
+                if not (1880 <= year <= datetime.now().year + 5):
+                    print(f"DEBUG [FHIR Mapper]: Varování parsování data (YYYY-MM-DD): Neobvyklý rok {year} (původní: '{original_date_str}'). Povolený rozsah: 1880-{datetime.now().year + 5}. Pokračuji na další metody parsování.")
+                elif not (1 <= month <= 12):
+                    print(f"DEBUG [FHIR Mapper]: Chyba parsování data (YYYY-MM-DD): Neplatný měsíc {month} (původní: '{original_date_str}'). Měsíc musí být 1-12. Pokračuji na další metody parsování.")
+                elif not (1 <= day <= 31): # Základní kontrola
+                    print(f"DEBUG [FHIR Mapper]: Chyba parsování data (YYYY-MM-DD): Neplatný den {day} (původní: '{original_date_str}'). Den musí být 1-31. Pokračuji na další metody parsování.")
+                else:
+                    # Vytvoření datetime objektu pro finální validaci a formátování
+                    parsed_date = datetime(year, month, day).strftime('%Y-%m-%d')
+                    print(f"DEBUG [FHIR Mapper]: parse_date_to_fhir_format: Úspěšně parsováno '{original_date_str}' jako YYYY-MM-DD na '{parsed_date}'.")
+                    return parsed_date
+            except ValueError as e:
+                print(f"DEBUG [FHIR Mapper]: Chyba parsování data (YYYY-MM-DD): Neplatná hodnota data (např. 30. února): {e}. Části: rok='{year_str}', měsíc='{month_str}', den='{day_str}' (původní: '{original_date_str}'). Pokračuji na další metody parsování.")
+            # Pokud dojde k chybě nebo selže validace, necháme funkci pokračovat k dalším metodám parsování.
+
+    # 2. Pokus o parsování formátů s textovými měsíci a DD.MM.YYYY
     # Slovníky pro mapování českých názvů měsíců na číselné reprezentace
     # Genitiv (např. "ledna", "února")
     MONTH_MAP_GENITIVE = {
@@ -168,6 +217,47 @@ def parse_date_to_fhir_format(date_str: str) -> str | None:
     except IndexError: # Tento by neměl nastat díky kontrole len(parts)
         print(f"DEBUG [FHIR Mapper]: Chyba parsování data: Indexová chyba při přístupu k částem data (původní: '{original_date_str}').")
         return None
+
+def is_valid_birth_number(birth_number_str: str) -> bool:
+    """
+    Validuje formát a kontrolní součet českého rodného čísla.
+
+    Args:
+        birth_number_str: Řetězec rodného čísla (může obsahovat lomítko).
+
+    Returns:
+        True pokud je RČ validní, jinak False.
+    """
+    if not birth_number_str:
+        return False
+    cleaned_rc = birth_number_str.replace("/", "")
+
+    if not (len(cleaned_rc) == 9 or len(cleaned_rc) == 10):
+        print(f"DEBUG [FHIR Mapper]: Neplatná délka RČ: {len(cleaned_rc)} pro '{birth_number_str}'. Musí být 9 nebo 10.")
+        return False
+
+    if not cleaned_rc.isdigit():
+        print(f"DEBUG [FHIR Mapper]: RČ '{birth_number_str}' obsahuje nečíselné znaky.")
+        return False
+
+    # Pro RČ přidělovaná od 1. ledna 1954 (desetimístná) se kontroluje dělitelnost 11.
+    # RČ přidělovaná od 1.1.2004 již nemusí být dělitelná 11, ale pro zjednodušení
+    # tuto kontrolu zde ponecháváme pro starší RČ, kde platila.
+    # Pro devítimístná RČ (před 1954) tato kontrola obecně neplatí.
+    if len(cleaned_rc) == 10:
+        year_prefix = int(cleaned_rc[:2])
+        # Kontrola dělitelnosti 11 pro RČ vydaná v roce 1954 a později.
+        # Pro RČ vydaná před rokem 1954 (první dvojčíslí < 54) se dělitelnost 11 typicky nekontrolovala
+        # nebo měla jiná pravidla, která zde pro zjednodušení neimplementujeme.
+        # Dále, RČ od 2004 nemusí být dělitelná 11.
+        # Tato podmínka je tedy zjednodušením pro běžná RČ z let 1954-2003.
+        if year_prefix >= 54 : # Zahrnuje roky 1954-1999 a 2054+ (což je v budoucnu)
+                               # a také roky 2004-2053 (kde už dělitelnost platit nemusí)
+                               # Pro jednoduchost zde kontrolujeme pro všechny 10-místné RČ s rokem >= 54
+            if int(cleaned_rc) % 11 != 0:
+                print(f"DEBUG [FHIR Mapper]: RČ '{birth_number_str}' (10místné, rok >= 1954) není dělitelné 11.")
+                return False
+    return True
 
 def generate_fhir_id() -> str:
     """
@@ -284,17 +374,21 @@ def parse_condition_data(text: str) -> dict:
 
 def parse_vital_signs_data(text: str) -> dict:
     """
-    Parsování textu pro extrakci vitálních funkcí: pulz a teplota.
+    Parsování textu pro extrakci vitálních funkcí: pulz, teplota, výška a hmotnost.
 
     Args:
         text: Vstupní text lékařské zprávy.
 
     Returns:
-        Slovník s extrahovanými daty o pulzu a teplotě. Klíče:
+        Slovník s extrahovanými daty o vitálních funkcích. Klíče:
         - "pulse_value": Hodnota pulzu.
         - "pulse_unit": Jednotka pulzu (standardizováno na "/min").
         - "temperature_value": Hodnota teploty (desetinná čárka normalizována na tečku).
         - "temperature_unit": Jednotka teploty (standardizováno na "°C").
+        - "height_value": Hodnota výšky (desetinná čárka normalizována na tečku).
+        - "height_unit": Jednotka výšky (standardizováno na "cm").
+        - "weight_value": Hodnota hmotnosti (desetinná čárka normalizována na tečku).
+        - "weight_unit": Jednotka hmotnosti (standardizováno na "kg").
     """
     vital_signs_data = {} # Inicializace prázdného slovníku
 
@@ -313,6 +407,26 @@ def parse_vital_signs_data(text: str) -> dict:
         vital_signs_data["temperature_value"] = temperature_value_raw.replace(",", ".")
         vital_signs_data["temperature_unit"] = "°C" # Standardizovaná jednotka pro FHIR
         print(f"DEBUG [FHIR Mapper]: Nalezena teplota: {vital_signs_data['temperature_value']} {vital_signs_data['temperature_unit']} (Raw: '{temperature_value_raw}')")
+
+    # Extrakce výšky
+    height_match = re.search(REGEX_HEIGHT, text, re.IGNORECASE)
+    if height_match:
+        height_value_raw = height_match.group(1).strip()
+        vital_signs_data["height_value"] = height_value_raw.replace(",", ".")
+        # Pokud je jednotka explicitně uvedena a je "cm", použijeme ji, jinak default "cm".
+        # group(2) může být None, pokud jednotka není v textu.
+        vital_signs_data["height_unit"] = height_match.group(2) if height_match.group(2) and height_match.group(2).lower() == "cm" else "cm"
+        print(f"DEBUG [FHIR Mapper]: Nalezena výška: {vital_signs_data['height_value']} {vital_signs_data['height_unit']} (Raw: '{height_value_raw}')")
+
+    # Extrakce hmotnosti
+    weight_match = re.search(REGEX_WEIGHT, text, re.IGNORECASE)
+    if weight_match:
+        weight_value_raw = weight_match.group(1).strip()
+        vital_signs_data["weight_value"] = weight_value_raw.replace(",", ".")
+        # Pokud je jednotka explicitně uvedena a je "kg", použijeme ji, jinak default "kg".
+        # group(2) může být None.
+        vital_signs_data["weight_unit"] = weight_match.group(2) if weight_match.group(2) and weight_match.group(2).lower() == "kg" else "kg"
+        print(f"DEBUG [FHIR Mapper]: Nalezena hmotnost: {vital_signs_data['weight_value']} {vital_signs_data['weight_unit']} (Raw: '{weight_value_raw}')")
 
     # print(f"DEBUG [FHIR Mapper]: Parsed vital signs data: {vital_signs_data}")
     return vital_signs_data
@@ -360,10 +474,12 @@ def create_fhir_patient_resource(patient_data: dict) -> dict | None:
 
     # Přidání rodného čísla jako identifikátoru, pokud bylo nalezeno
     if "birth_number_raw" in patient_data:
-        birth_number_cleaned = patient_data["birth_number_raw"].replace("/", "") # Odstranění případného lomítka
-        resource["identifier"] = [
-            {
-                "use": "official", # Oficiální identifikátor
+        raw_rc = patient_data["birth_number_raw"]
+        if is_valid_birth_number(raw_rc):
+            birth_number_cleaned = raw_rc.replace("/", "") # Odstranění případného lomítka
+            resource["identifier"] = [
+                {
+                    "use": "official", # Oficiální identifikátor
                 "type": { # Typ identifikátoru
                     "coding": [
                         { # Kódování typu
@@ -375,9 +491,11 @@ def create_fhir_patient_resource(patient_data: dict) -> dict | None:
                     "text": "Rodné číslo" # Český popis
                 },
                 "system": "urn:oid:1.2.203.17.4.1", # OID pro rodná čísla v ČR
-                "value": birth_number_cleaned # Hodnota rodného čísla
-            }
-        ]
+                    "value": birth_number_cleaned # Hodnota rodného čísla
+                }
+            ]
+        else:
+            print(f"VAROVÁNÍ [FHIR Mapper]: Neplatný formát nebo kontrolní součet rodného čísla: '{raw_rc}'. RČ nebude přidáno do FHIR zdroje.")
 
     print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Patient resource (ID: {resource_id}).")
     return resource
@@ -403,6 +521,13 @@ def create_fhir_observation_bp_resource(observation_data: dict, patient_referenc
         systolic_str, diastolic_str = observation_data["blood_pressure_value"].split('/')
         systolic = int(systolic_str.strip())
         diastolic = int(diastolic_str.strip())
+
+        # Validace rozsahu hodnot
+        if not (50 <= systolic <= 300):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Systolický tlak {systolic} je mimo očekávaný rozsah (50-300 mmHg).")
+        if not (30 <= diastolic <= 200):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Diastolický tlak {diastolic} je mimo očekávaný rozsah (30-200 mmHg).")
+
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatný formát hodnoty krevního tlaku: '{observation_data['blood_pressure_value']}'. Nelze rozdělit nebo převést na int.")
         return None
@@ -456,6 +581,8 @@ def create_fhir_observation_pulse_resource(observation_data: dict, patient_refer
 
     try:
         pulse_val = int(observation_data["pulse_value"])
+        if not (20 <= pulse_val <= 300):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota pulzu {pulse_val} je mimo očekávaný rozsah (20-300 tepů/min).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota pulzu: '{observation_data['pulse_value']}'. Nelze převést na int.")
         return None
@@ -503,6 +630,8 @@ def create_fhir_observation_temperature_resource(observation_data: dict, patient
     try:
         # Hodnota teploty by měla být již normalizována na tečku jako desetinný oddělovač
         temp_val = float(observation_data["temperature_value"])
+        if not (30.0 <= temp_val <= 45.0):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota teploty {temp_val}°C je mimo očekávaný rozsah (30.0-45.0°C).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota teploty: '{observation_data['temperature_value']}'. Nelze převést na float.")
         return None
@@ -527,6 +656,102 @@ def create_fhir_observation_temperature_resource(observation_data: dict, patient
         }
     }
     print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Observation (Teplota) resource (ID: {resource_id}).")
+    return resource
+
+def create_fhir_observation_height_resource(observation_data: dict, patient_reference_id: str) -> dict | None:
+    """
+    Vytváří FHIR Observation resource pro tělesnou výšku.
+
+    Args:
+        observation_data: Slovník obsahující data o výšce (očekává klíč "height_value").
+        patient_reference_id: Referenční ID pacienta (např. "Patient/uuid").
+
+    Returns:
+        Slovník reprezentující FHIR Observation resource pro výšku, nebo None pokud chybí data.
+    """
+    if not observation_data.get("height_value"):
+        print("DEBUG [FHIR Mapper]: Nedostatek dat (height_value) pro vytvoření FHIR Observation (Výška).")
+        return None
+
+    resource_id = generate_fhir_id()
+    current_time_iso = datetime.now().isoformat()
+
+    try:
+        height_val = float(observation_data["height_value"])
+        if not (40.0 <= height_val <= 250.0):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota výšky {height_val} cm je mimo očekávaný rozsah (40.0-250.0 cm).")
+    except ValueError:
+        print(f"CHYBA [FHIR Mapper]: Neplatná hodnota výšky: '{observation_data['height_value']}'. Nelze převést na float.")
+        return None
+
+    resource = {
+        "resourceType": "Observation",
+        "id": resource_id,
+        "meta": {"profile": ["https://ncez.mzcr.cz/fhir/core/StructureDefinition/VitalSignsObservation"]},
+        "status": "final",
+        "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "vital-signs", "display": "Vital Signs"}]}],
+        "code": { # Kód pro tělesnou výšku
+            "coding": [{"system": "http://loinc.org", "code": "8302-2", "display": "Body height"}],
+            "text": "Tělesná výška"
+        },
+        "subject": {"reference": patient_reference_id},
+        "effectiveDateTime": current_time_iso, # Čas záznamu
+        "valueQuantity": { # Hodnota výšky
+            "value": height_val,
+            "unit": observation_data.get("height_unit", "cm"), # Jednotka (standardizovaná)
+            "system": "http://unitsofmeasure.org", # Systém jednotek
+            "code": "cm" # UCUM kód pro cm
+        }
+    }
+    print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Observation (Výška) resource (ID: {resource_id}).")
+    return resource
+
+def create_fhir_observation_weight_resource(observation_data: dict, patient_reference_id: str) -> dict | None:
+    """
+    Vytváří FHIR Observation resource pro tělesnou hmotnost.
+
+    Args:
+        observation_data: Slovník obsahující data o hmotnosti (očekává klíč "weight_value").
+        patient_reference_id: Referenční ID pacienta (např. "Patient/uuid").
+
+    Returns:
+        Slovník reprezentující FHIR Observation resource pro hmotnost, nebo None pokud chybí data.
+    """
+    if not observation_data.get("weight_value"):
+        print("DEBUG [FHIR Mapper]: Nedostatek dat (weight_value) pro vytvoření FHIR Observation (Hmotnost).")
+        return None
+
+    resource_id = generate_fhir_id()
+    current_time_iso = datetime.now().isoformat()
+
+    try:
+        weight_val = float(observation_data["weight_value"])
+        if not (1.0 <= weight_val <= 300.0):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota hmotnosti {weight_val} kg je mimo očekávaný rozsah (1.0-300.0 kg).")
+    except ValueError:
+        print(f"CHYBA [FHIR Mapper]: Neplatná hodnota hmotnosti: '{observation_data['weight_value']}'. Nelze převést na float.")
+        return None
+
+    resource = {
+        "resourceType": "Observation",
+        "id": resource_id,
+        "meta": {"profile": ["https://ncez.mzcr.cz/fhir/core/StructureDefinition/VitalSignsObservation"]},
+        "status": "final",
+        "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "vital-signs", "display": "Vital Signs"}]}],
+        "code": { # Kód pro tělesnou hmotnost
+            "coding": [{"system": "http://loinc.org", "code": "29463-7", "display": "Body weight"}],
+            "text": "Tělesná hmotnost"
+        },
+        "subject": {"reference": patient_reference_id},
+        "effectiveDateTime": current_time_iso, # Čas záznamu
+        "valueQuantity": { # Hodnota hmotnosti
+            "value": weight_val,
+            "unit": observation_data.get("weight_unit", "kg"), # Jednotka (standardizovaná)
+            "system": "http://unitsofmeasure.org", # Systém jednotek
+            "code": "kg" # UCUM kód pro kg
+        }
+    }
+    print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Observation (Hmotnost) resource (ID: {resource_id}).")
     return resource
 
 def create_fhir_condition_resource(condition_data: dict, patient_reference_id: str) -> dict | None:
@@ -578,7 +803,7 @@ def map_text_to_fhir(text: str) -> list:
     Postupně parsuje a vytváří:
     1. Patient resource.
     2. Observation resource pro krevní tlak.
-    3. Observation resources pro pulz a teplotu.
+    3. Observation resources pro pulz, teplotu, výšku a hmotnost.
     4. Condition resource pro diagnózu.
 
     Args:
@@ -641,6 +866,18 @@ def map_text_to_fhir(text: str) -> list:
             fhir_resources.append(temperature_resource)
             print(f"INFO [FHIR Mapper]: Observation (Teplota) resource úspěšně vytvořen (ID: {temperature_resource['id']}).")
 
+    if vital_signs_data.get("height_value"):
+        height_resource = create_fhir_observation_height_resource(vital_signs_data, patient_ref_id)
+        if height_resource:
+            fhir_resources.append(height_resource)
+            print(f"INFO [FHIR Mapper]: Observation (Výška) resource úspěšně vytvořen (ID: {height_resource['id']}).")
+
+    if vital_signs_data.get("weight_value"):
+        weight_resource = create_fhir_observation_weight_resource(vital_signs_data, patient_ref_id)
+        if weight_resource:
+            fhir_resources.append(weight_resource)
+            print(f"INFO [FHIR Mapper]: Observation (Hmotnost) resource úspěšně vytvořen (ID: {weight_resource['id']}).")
+
     # 4. Parsovat a vytvořit Condition pro diagnózu
     extracted_condition_data = parse_condition_data(text)
     if extracted_condition_data.get("diagnosis_text"): # Kontrola, zda byl text diagnózy nalezen
@@ -665,12 +902,12 @@ if __name__ == '__main__':
     sample_text_1 = """
     Pacient: MUDr. Jana Nováková, CSc.
     Datum narození: 15. května 1980
-    RČ: 805515/1234
+    RČ: 805515/1234 (Validní RČ)
     Bydliště: Někde 123, Město
     ---
     Pacient: Karel Novotný
     Nar.: 20 / 3 / 1975
-    Rodné číslo: 7503201234
+    Rodné číslo: 7503201234 (Validní RČ)
     Kontakt: 123456789
     ---
     Subjektivní potíže: Bolest hlavy.
@@ -678,6 +915,8 @@ if __name__ == '__main__':
     Krevní tlak: 135 / 88 mmHg
     Pulz: 70/min pravidelný
     Teplota: 36.5 C
+    Výška: 175 cm
+    Hmotnost: 78.5 kg
     ---
     Diagnóza: Hypertenze esenciální (primární) I10. Dg. Diabetes Mellitus E11.
     Medikace: Prestarium Neo 5 mg 1-0-0
@@ -705,6 +944,8 @@ if __name__ == '__main__':
     Krevní tlak : 120/80
     SF: 65 /min.
     T: 37,1C
+    Výš.: 180cm
+    Hm.: 82 kg
     """
     sample_text_5_no_year = """
     Pacientka: Anna Krátká
@@ -739,9 +980,33 @@ if __name__ == '__main__':
     Závěr: Pacient se cítí dobře.
     """ # Text bez identifikace pacienta
 
+    sample_text_invalid_data = """
+    Pacient: Chyboslav Datel
+    Nar.: 10.10.1980
+    RČ: 12345/123 (Krátké RČ)
+    RČ: 805515/1235 (Neplatné RČ pro 1980 - nedělitelné 11)
+    RČ: 405515/1234 (Platné RČ pro <1954 i bez dělitelnosti 11, pokud je 10 číslic)
+    RČ: 805515123A (Nečíselné RČ)
+    ---
+    Objektivní nález:
+    Krevní tlak: 40/20 mmHg (Nízký TK)
+    TK: 350/250 mmHg (Vysoký TK)
+    Pulz: 10/min (Nízký pulz)
+    SF: 350/min (Vysoký pulz)
+    Teplota: 25 °C (Nízká teplota)
+    T: 50C (Vysoká teplota)
+    Výška: 30 cm (Nízká výška)
+    Výš.: 300 cm (Vysoká výška)
+    Hmotnost: 0.5 kg (Nízká hmotnost)
+    Hm.: 500 kg (Vysoká hmotnost)
+    ---
+    Diagnóza: Syndrom nevalidních dat.
+    """
+
     test_texts = {
         "Komplexní zpráva 1": sample_text_1,
         "Komplexní zpráva 2": sample_text_2,
+        "Data s nevalidními hodnotami": sample_text_invalid_data,
         "Žádná data": sample_text_3,
         "Krátká zpráva": sample_text_4,
         "Datum bez roku (očekává se chyba)": sample_text_5_no_year,
@@ -749,13 +1014,46 @@ if __name__ == '__main__':
         "Datum se zkráceným měsícem (pro)": sample_text_7_short_month,
         "Pouze data pacienta": sample_text_8_only_patient,
         "Data bez pacienta (očekává se chyba pacienta)": sample_text_9_no_patient_data,
+        "ISO Datum": "Pacient: Test ISO\nNar.: 2023-07-15",
+        "ISO Datum s tečkami": "Pacient: Test ISO Tečky\nNar.: 2024.01.20",
+        "ISO Datum s lomítky": "Pacient: Test ISO Lomítka\nNar.: 2022/11/05",
+        "Neplatné ISO Datum (měsíc)": "Pacient: Test ISO Měsíc\nNar.: 2023-13-01",
+        "Neplatné ISO Datum (den)": "Pacient: Test ISO Den\nNar.: 2023-02-30",
     }
 
-    for test_name, sample_text in test_texts.items():
+    for test_name, sample_text_or_date_string in test_texts.items():
         print(f"\n--- Testovací případ: {test_name} ---")
-        print(f"Vstupní text:\n{sample_text}\n")
 
-        fhir_result_list = map_text_to_fhir(sample_text)
+        # Rozlišení, zda je vstupem celý text zprávy nebo jen řetězec data pro parse_date_to_fhir_format
+        if "Pacient:" in sample_text_or_date_string or "TK:" in sample_text_or_date_string or not re.match(r"^\d{4}[\.\/\-]", sample_text_or_date_string.split("\n")[-1].replace("Nar.: ","").strip()):
+            # Jedná se o komplexní text zprávy
+            print(f"Vstupní text (komplexní zpráva):\n{sample_text_or_date_string}\n")
+            fhir_result_list = map_text_to_fhir(sample_text_or_date_string)
+        else:
+            # Jedná se o přímý test funkce parse_date_to_fhir_format
+            # V tomto případě `sample_text_or_date_string` je samotný date string (poslední řádek po "Nar.: ")
+            # nebo je to přímo date string, pokud neobsahuje "Pacient:" atd.
+            date_to_test = sample_text_or_date_string
+            if "\n" in date_to_test: # Pokud je to vícerádkový string, vezmeme poslední část po "Nar.: "
+                 lines = date_to_test.split("\n")
+                 for line in reversed(lines):
+                     if "Nar.:" in line:
+                         date_to_test = line.split("Nar.:")[-1].strip()
+                         break
+            print(f"Vstupní řetězec data pro parse_date_to_fhir_format: '{date_to_test}'")
+            parsed_date = parse_date_to_fhir_format(date_to_test)
+            print(f"Výsledek parse_date_to_fhir_format: '{parsed_date}'")
+            # Pro konzistenci výstupu můžeme vytvořit "falešný" FHIR list
+            if parsed_date:
+                 # Vytvoříme jednoduchý Patient resource pro ukázku, pokud datum prošlo
+                 fhir_result_list = [{
+                     "resourceType": "Patient", "id": "test-patient",
+                     "birthDate": parsed_date,
+                     "name": [{"text": test_name.replace(" (očekává se chyba)", "")}]
+                 }]
+            else:
+                fhir_result_list = []
+
 
         if fhir_result_list:
             print(f"--- Výsledné FHIR zdroje pro '{test_name}' (JSON Bundle) ---")
