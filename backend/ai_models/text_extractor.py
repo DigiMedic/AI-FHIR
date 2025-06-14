@@ -93,6 +93,9 @@ def extract_text_from_document(document_input, input_type="text", lang='ces+eng'
                         "end_char": ent.end_char
                     })
                 print(f"DEBUG: Stanza NLP extrahovala {len(entities)} entit.")
+                # Přidáno detailní logování každé entity
+                for ent_debug in entities:
+                    print(f"DEBUG: NLP Entity: '{ent_debug['text']}', Type: '{ent_debug['type']}'")
                 return entities
             except Exception as e:
                 print(f"CHYBA: Selhání při NLP zpracování (Stanza): {e}")
@@ -207,20 +210,45 @@ if __name__ == '__main__':
     if stanza:
         print("\n--- Test Stanza NLP Extrakce ---")
         sample_nlp_text = "Pacientka Jana Nováková, narozená 15. května 1980 v Praze, si stěžuje na bolest hlavy. Bydliště: Dlouhá 12, Praha 1. RČ: 805515/1234. Navštívila Nemocnici Na Homolce."
-        print(f"Vstupní text pro NLP:\n'{sample_nlp_text}'\n")
+        print(f"Vstupní text pro NLP (původní):\n'{sample_nlp_text}'\n")
         try:
-            nlp_entities = extract_text_from_document(sample_nlp_text, input_type="text", use_nlp=True, nlp_engine="stanza")
-            if isinstance(nlp_entities, list):
-                print("Extrahované entity (NLP):")
-                for entity in nlp_entities:
+            nlp_entities_original = extract_text_from_document(sample_nlp_text, input_type="text", use_nlp=True, nlp_engine="stanza")
+            if isinstance(nlp_entities_original, list):
+                print("Extrahované entity (NLP - původní text):")
+                for entity in nlp_entities_original:
                     print(f"- Text: '{entity['text']}', Typ: {entity['type']}, Start: {entity['start_char']}, End: {entity['end_char']}")
             else:
                 # Pokud NLP selhalo a propadlo to k non-NLP extrakci, typ bude str
-                print(f"NLP extrakce nevrátila seznam entit, ale: {type(nlp_entities)}. Obsah: '{nlp_entities}'")
+                print(f"NLP extrakce (původní text) nevrátila seznam entit, ale: {type(nlp_entities_original)}. Obsah: '{nlp_entities_original}'")
         except RuntimeError as e: # Zachytáváme RuntimeError z get_stanza_pipeline nebo z kontroly Stanza
-             print(f"CHYBA při testování NLP extrakce (RuntimeError): {e}")
+             print(f"CHYBA při testování NLP extrakce (původní text, RuntimeError): {e}")
         except Exception as e:
-            print(f"CHYBA při testování NLP extrakce (jiná chyba): {e}")
+            print(f"CHYBA při testování NLP extrakce (původní text, jiná chyba): {e}")
+
+        print("\n--- Test Stanza NLP Extrakce (lékařský text) ---")
+        sample_nlp_text_medical = """Pacient Karel Novák, narozen 6.3.1955.
+Anamnéza: Diabetes mellitus 2. typu na PAD, hypertenze kompenzovaná.
+Objektivně: TK 140/90 mmHg, P 70/min pravidelně. Glykemie 5.5 mmol/l.
+Poslechově dýchání čisté, sklípkové. Břicho měkké, palpačně nebolestivé.
+Závěr: Kompenzovaný DM II. typu a hypertenze. Kontrola za 3 měsíce.
+Medikace: Metformin 1000mg 1-0-1, Prestarium Neo Combi 1-0-0."""
+        print(f"Vstupní lékařský text pro NLP:\n'{sample_nlp_text_medical}'\n")
+        try:
+            nlp_entities_medical = extract_text_from_document(sample_nlp_text_medical, input_type="text", use_nlp=True, nlp_engine="stanza")
+            if isinstance(nlp_entities_medical, list):
+                print("Extrahované entity (NLP - lékařský text):")
+                # Detailní logování je již součástí funkce extract_text_from_document.
+                # Zde můžeme nechat původní smyčku pro výpis, pokud chceme vidět i zde přehled.
+                if not nlp_entities_medical:
+                    print("Žádné entity nebyly extrahovány.")
+                for entity in nlp_entities_medical: # Tento cyklus je zde pro ukázku, hlavní logování je ve funkci
+                    print(f"- Text: '{entity['text']}', Typ: {entity['type']}', Start: {entity['start_char']}, End: {entity['end_char']}")
+            else:
+                print(f"NLP extrakce (lékařský text) nevrátila seznam entit, ale: {type(nlp_entities_medical)}. Obsah: '{nlp_entities_medical}'")
+        except RuntimeError as e:
+             print(f"CHYBA při testování NLP extrakce (lékařský text, RuntimeError): {e}")
+        except Exception as e:
+            print(f"CHYBA při testování NLP extrakce (lékařský text, jiná chyba): {e}")
 
         # Test NLP s chybou (např. pokud by se Stanza nepodařilo inicializovat a kód by propadl)
         # Tento test je spíše koncepční, protože get_stanza_pipeline() by mělo vyvolat chybu dříve
@@ -249,5 +277,3 @@ if __name__ == '__main__':
                 print(f"NLP extrakce z prázdného textu nevrátila seznam, ale: {type(nlp_empty_entities)}")
         except Exception as e:
             print(f"CHYBA při testování NLP s prázdným vstupem: {e}")
-
-```
