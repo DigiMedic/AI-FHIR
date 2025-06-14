@@ -107,3 +107,133 @@ def test_extract_text_from_document_nlp_stanza_pipeline_fail_fallback(monkeypatc
     # so it should fall through to the non-NLP text processing block.
     result = text_extractor.extract_text_from_document(sample_text, input_type="text", use_nlp=True, nlp_engine="stanza")
     assert result == expected_non_nlp_output
+
+# --- Testy pro úspěšnou NLP extrakci ---
+# Tyto testy předpokládají, že Stanza a její český model jsou dostupné a funkční.
+# Mohou být pomalejší kvůli inicializaci NLP pipeline.
+@pytest.mark.skipif(text_extractor.stanza is None, reason="Knihovna Stanza není dostupná.")
+@pytest.mark.parametrize("test_id, input_text_verbatim, expected_entities_subset", [
+    (
+        "name_extraction",
+        "Pacient Jan Novák navštívil ordinaci.",
+        [
+            {"text": "Jan Novák", "type": "P"}, # Stanza vrací 'P' pro Person
+        ]
+    ),
+    (
+        "date_extraction",
+        "Datum narození: 15.1.1980.",
+        [
+            {"text": "15.1.1980", "type": "DATE"}, # Stanza může vrátit 'DATE' nebo 'T'
+        ]
+    ),
+    (
+        "diagnosis_extraction",
+        "Závěr: Diabetes mellitus 2. typu.",
+        [
+            # Stanza cs_cnec model typicky vrací 'DIS' pro onemocnění
+            {"text": "Diabetes mellitus 2. typu", "type": "DIS"},
+        ]
+    ),
+    (
+        "numeric_value_extraction",
+        "TK 120/80 mmHg a puls 75/min.",
+        [
+            {"text": "120", "type": "CARDINAL"},
+            {"text": "80", "type": "CARDINAL"},
+            {"text": "75", "type": "CARDINAL"},
+        ]
+    ),
+    (
+        "mixed_extraction",
+        "MUDr. Eva Malá, nar. 20.05.1970, Z: Chřipka.",
+        [
+            {"text": "Eva Malá", "type": "P"},
+            {"text": "20.05.1970", "type": "DATE"},
+            {"text": "Chřipka", "type": "DIS"},
+        ]
+    ),
+])
+def test_extract_text_from_document_with_nlp_success(test_id, input_text_verbatim, expected_entities_subset):
+    """
+    Testuje úspěšnou extrakci entit pomocí NLP (Stanza).
+    Ověřuje strukturu výstupu a přítomnost klíčových entit.
+    Poznámka: Tento test závisí na modelu Stanza a jeho konkrétních výstupech,
+              které se mohou mírně lišit mezi verzemi modelu.
+              Ověřujeme jen podmnožinu očekávaných entit.
+    """
+    # `input_text_verbatim` se použije jako vstup, normalizace se děje uvnitř funkce POUZE pro non-NLP cestu.
+    # Pro NLP cestu se původní text předává do Stanza pipeline.
+    nlp_output = text_extractor.extract_text_from_document(input_text_verbatim, input_type="text", use_nlp=True, nlp_engine="stanza")
+
+    assert isinstance(nlp_output, list), "Výstup by měl být seznam (list)."
+    if not nlp_output and expected_entities_subset: # Pokud je výstup prázdný, ale očekávali jsme entity
+        pytest.fail(f"Test {test_id}: NLP výstup je prázdný, ale očekávaly se entity: {expected_entities_subset}")
+
+    if not nlp_output and not expected_entities_subset: # Očekávali jsme prázdný výstup (např. pro text bez entit)
+        return # Test je v pořádku
+
+    for entity_dict in nlp_output:
+        assert isinstance(entity_dict, dict), "Každý prvek v seznamu by měl být slovník."
+        assert "text" in entity_dict, "Klíč 'text' chybí v NLP entitě."
+        assert "type" in entity_dict, "Klíč 'type' chybí v NLP entitě."
+        assert "start_char" in entity_dict, "Klíč 'start_char' chybí v NLP entitě."
+        assert "end_char" in entity_dict, "Klíč 'end_char' chybí v NLP entitě."
+        assert isinstance(entity_dict["start_char"], int)
+        assert isinstance(entity_dict["end_char"], int)
+        assert entity_dict["start_char"] <= entity_dict["end_char"]
+        # Ověření, že start_char a end_char odpovídají textu entity v původním textu
+        assert input_text_verbatim[entity_dict["start_char"]:entity_dict["end_char"]] == entity_dict["text"]
+
+    # Ověření přítomnosti a typu klíčových očekávaných entit
+    # Toto je zjednodušené ověření, protože přesné pozice a tokenizace mohou být komplexní.
+    # Hledáme, zda entity s očekávaným textem a typem jsou ve výstupu.
+    for expected_entity in expected_entities_subset:
+        found_expected = False
+        for actual_entity in nlp_output:
+            # Pro typy DATE a T (čas/datum) Stanza může vracet různé normalizované formy
+            # nebo rozdělovat na více entit. Pro jednoduchost testu zde akceptujeme,
+            # že pokud očekáváme DATE, může to být i T a naopak, pokud text sedí.
+            # Podobně CARDINAL vs NUMBER.
+            type_match = False
+            if expected_entity["type"] in ["DATE", "T"] and actual_entity["type"] in ["DATE", "T"]:
+                type_match = True
+            elif expected_entity["type"] in ["CARDINAL", "NUMBER"] and actual_entity["type"] in ["CARDINAL", "NUMBER"]:
+                type_match = True
+            elif expected_entity["type"] == actual_entity["type"]:
+                type_match = True
+
+            # Pro text entity můžeme chtít být flexibilnější, pokud NLP model vrací např. "Diabetes Mellitus" vs "diabetes mellitus"
+            # Zde porovnáváme case-insensitive a stripujeme.
+            if type_match and \
+               expected_entity["text"].strip().lower() == actual_entity["text"].strip().lower():
+                found_expected = True
+                break
+        assert found_expected, f"Očekávaná entita {expected_entity} nebyla nalezena v NLP výstupu: {nlp_output}"
+
+# Doplňkový test pro případ, kdy NLP vrátí prázdný seznam (např. text bez rozpoznatelných entit)
+@pytest.mark.skipif(text_extractor.stanza is None, reason="Knihovna Stanza není dostupná.")
+def test_extract_text_from_document_with_nlp_no_entities_found():
+    input_text = "ahoj světe" # Text, kde Stanza pravděpodobně nenajde žádné specifické entity (P, DIS, DATE, atd.)
+                           # Může najít 'word' entity, ale my testujeme na vyšší úrovni.
+                           # `extract_text_from_document` by měla vrátit jen entity, které nejsou jen slova/tokeny.
+                           # Aktuální implementace vrací entity, jak je dá Stanza.
+                           # Pokud Stanza vrátí jen tokeny/slova, tak ty tam budou.
+                           # Pro tento test je důležité, že to nepadne a vrátí list.
+    nlp_output = text_extractor.extract_text_from_document(input_text, input_type="text", use_nlp=True, nlp_engine="stanza")
+    assert isinstance(nlp_output, list)
+    # Můžeme zkontrolovat, že pokud jsou tam entity, mají správnou strukturu.
+    for entity_dict in nlp_output:
+        assert isinstance(entity_dict, dict)
+        assert "text" in entity_dict
+        assert "type" in entity_dict
+        assert "start_char" in entity_dict
+        assert "end_char" in entity_dict
+        assert input_text[entity_dict["start_char"]:entity_dict["end_char"]] == entity_dict["text"]
+
+# Test, že pokud je use_nlp=True, ale nlp_engine není "stanza", vrátí se non-NLP text
+def test_extract_text_from_document_nlp_unsupported_engine_fallback():
+    sample_text = "Test pro NLP s neznámým enginem."
+    expected_non_nlp_output = "test pro nlp s neznámým enginem."
+    result = text_extractor.extract_text_from_document(sample_text, input_type="text", use_nlp=True, nlp_engine="nonexistent_engine")
+    assert result == expected_non_nlp_output

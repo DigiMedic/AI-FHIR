@@ -19,7 +19,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 
 ### Klíčové funkce
 1. **Podpora více formátů**: Zpracování textových dokumentů (.txt) a naskenovaných obrázků (formáty .png, .jpg, .jpeg). Podpora PDF je plánována do budoucna.
-2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu: primárně využívá model Stanza (`cs_cnec`) pro rozpoznávání pojmenovaných entit (NER) jako jsou jména pacientů, data, diagnózy (např. typ 'DIS'). Pro specifické strukturované údaje (např. některé vitální funkce) a jako fallback jsou použity pokročilé regulární výrazy.
+2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu: primárně využívá model Stanza (`cs_cnec`) pro rozpoznávání pojmenovaných entit (NER) jako jsou jména pacientů, data, diagnózy (např. typ 'DIS'), a také pro identifikaci číselných hodnot a potenciálních jednotek u vitálních funkcí (krevní tlak, pulz, teplota, výška, hmotnost). Pro případy, kdy NLP extrakce není jednoznačná, nebo pro specifické, vysoce strukturované vzory, se jako fallback a doplňkový mechanismus používají pokročilé regulární výrazy. Tento hybridní model umožňuje robustnější a přesnější zpracování široké škály formátů lékařských zpráv.
 3. **FHIR mapování**: Automatická konverze dat do FHIR zdrojů.
 4. **Pokročilá validace dat**: Integrované kontroly pro zajištění konzistence a správnosti dat, včetně porovnání údajů z rodného čísla s datem narození, kontroly fyziologických rozsahů pro měřené hodnoty a ověření časové platnosti záznamů.
 5. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
@@ -27,7 +27,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 
 ### Technologický stack
 - **Frontend**: React.js
-- **AI modely**: Pro rozpoznávání pojmenovaných entit (NER) je využíván model cs_cnec z knihovny Stanza. Aplikace dále využívá kombinaci pravidel a regulárních výrazů.
+- **AI modely**: Pro rozpoznávání pojmenovaných entit (NER) je využíván model `cs_cnec` z knihovny Stanza, který identifikuje klíčové informace včetně jmen, dat, diagnóz a číselných hodnot. Tyto NLP entity jsou dále zpracovávány v kombinaci s kontextovou analýzou a pokročilými regulárními výrazy (jako fallback nebo pro zpřesnění) pro extrakci strukturovaných údajů, zejména vitálních funkcí.
 - **NER model**: Stanza (knihovna od Stanford NLP Group, model `cs_cnec` pro češtinu)
 - **OCR**: Tesseract
 - **Backend**: DigiMedic FHIR Backend API
@@ -79,7 +79,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
 - [x] **Integrace NLP modelu pro extrakci entit:**
     - [x] Výběr a testování předtrénovaného NLP modelu (vybrán `stanfordnlp/stanza-cs` s modelem `cs_cnec`, licence Apache 2.0).
-    - [~] Návrh hybridního přístupu (kombinace NLP Stanza a regexů) a jeho implementace pro klíčové entity (jméno pacienta, datum narození, diagnózy). (Implementace NLP pro extrakci některých klíčových entit jako jméno a diagnóza je provedena. NLP podpora pro číselné hodnoty vitálních funkcí je zatím základní a spoléhá se více na regex; další vylepšení jsou plánována).
+    - [x] Návrh hybridního přístupu (kombinace NLP Stanza a regexů) a jeho implementace pro klíčové entity (jméno pacienta, datum narození, diagnózy) i pro vitální funkce (krevní tlak, pulz, teplota, výška, hmotnost). NLP je nyní primárním zdrojem pro tyto entity, s regexy jako fallbackem a pro kontextovou validaci.
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
 - [x] **Pokročilá validace a návrh korekce dat:**
     - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
@@ -88,12 +88,12 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
     - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů.
 - [x] **Formalizace testování a výkonnostní optimalizace:**
-    - [x] Základní sada jednotkových testů pro backend (logika extrakce a mapování, validace) implementována pomocí pytest.
-    - [ ] Profilování a optimalizace kritických částí aplikace (OCR, FHIR mapování).
+    - [x] Rozšířená sada jednotkových testů pro backend (logika extrakce NLP i regex, mapování, validace, pomocné funkce) implementována pomocí pytest.
+    - [~] Provedeno základní profilování kritických částí aplikace (NLP extrakce, FHIR mapování) a identifikace potenciálních oblastí pro optimalizaci. Výkon je prozatím považován za akceptovatelný pro typické vstupy.
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
 - [ ] Komplexní testování komponenty
-- [ ] Integrace s produkčním prostředím DigiMedic (propojení frontendu s reálným backendem a API)
+- [~] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí. Propojení s frontendem a plná integrace s produkčním API je dalším krokem.
 - [ ] Tvorba uživatelské dokumentace
 - [ ] Příprava na nasazení
 ## Začínáme
@@ -118,7 +118,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
    ```
 3. Nastavte proměnné prostředí:
    `Proměnné prostředí se nastavují následovně:`
-   *   `Pro backend (FastAPI/Uvicorn): Pokud existuje soubor \`.env.example\` v kořenovém adresáři nebo v \`backend/\`, zkopírujte jej jako \`.env\` a upravte podle potřeby (např. pro nastavení Uvicorn serveru). Backend aktuálně nenačítá \`.env\` soubor přímo pro svou aplikační logiku (např. API klíče), ale konfigurace DigiMedic API klienta je prozatím simulovaná.`
+   *   `Pro backend (FastAPI/Uvicorn): Pokud existuje soubor \`.env.example\` v kořenovém adresáři nebo v \`backend/\`, zkopírujte jej jako \`.env\` a upravte podle potřeby (např. pro nastavení Uvicorn serveru). Backend aktuálně nenačítá \`.env\` soubor přímo pro svou aplikační logiku. Pro konfiguraci DigiMedic API klienta v reálném (nesimulovaném) režimu nastavte proměnné prostředí \`DIGIMEDIC_API_BASE_URL\` a \`DIGIMEDIC_API_TOKEN\`. Pokud nejsou nastaveny a klient není v simulovaném režimu, jeho chování může být omezené nebo může selhat (poběží v simulovaném režimu s varováním).`
    *   `Pro frontend (React): Pro nastavení specifických proměnných pro frontend, jako je URL adresa backendového API, vytvořte soubor \`frontend/.env\`. Do tohoto souboru můžete přidat proměnné s prefixem \`REACT_APP_\`, například: \`REACT_APP_API_URL=http://localhost:8000/api\`. Tyto proměnné pak budou dostupné v kódu frontendu přes \`process.env.REACT_APP_...\`.`
 4. Spusťte vývojový server:
    `Spuštění vývojových serverů:`
