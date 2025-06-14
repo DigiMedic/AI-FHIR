@@ -185,3 +185,264 @@ def test_map_text_to_fhir_basic_with_validation_capture(capsys):
     assert "VAROVÁNÍ [FHIR Mapper]: Hodnota Pulz (350 /min) je mimo očekávaný fyziologický rozsah (20-300 /min)." in captured.out
     # Check that RČ and birth date match (no warning should be present for mismatch)
     assert "Nesoulad mezi datem narození z RČ" not in captured.out
+
+
+# --- Testy pro extract_value_and_unit_from_nlp_entity_text ---
+@pytest.mark.parametrize("entity_text, surrounding_text, unit_regex_map, default_unit, expected_value, expected_unit", [
+    ("75", "/min", {"/min": r"/min|tepů/min"}, None, "75", "/min"),
+    ("36,5", "°C", {"°C": r"°C|C"}, None, "36.5", "°C"),
+    ("180", "cm", {"cm": r"cm"}, None, "180", "cm"),
+    ("Hmotnost 85.2", "kg", {"kg": r"kg"}, None, "85.2", "kg"), # Hodnota na konci entity
+    ("cca 90", " kg", {"kg": r"kg"}, None, "90", "kg"), # Jednotka v surrounding_text
+    ("Váha: 70.5", "", {"kg": r"kg"}, "kg", "70.5", "kg"), # Default unit
+    ("40", " tepů za minutu", {"/min": r"tepů/min|/min"}, None, "40", "/min"), # Složitější jednotka
+    ("Pulz je 60", "", {"/min": r"/min"}, "/min", "60", "/min"), # Jednotka chybí, použije se default
+    ("Teplota 37", " stupňů Celsia", {"°C": r"stupňů Celsia|°C"}, None, "37", "°C"),
+    # Případy, kdy jednotka je součástí entity_text
+    ("72/min", "", {"/min": r"/min|tepů/min"}, None, "72", "/min"),
+    ("38.2°C", " další text", {"°C": r"°C|C"}, None, "38.2", "°C"),
+    ("175cm", " a něco", {"cm": r"cm"}, None, "175", "cm"),
+    ("100kg", "", {"kg": r"kg"}, None, "100", "kg"),
+    # Neúspěšné extrakce
+    ("žádné číslo", "jednotka", {"jednotka": r"jednotka"}, None, None, None),
+    ("100", "neznámá jednotka", {"kg": r"kg"}, None, "100", None), # Hodnota ano, jednotka ne
+    ("100", "neznámá jednotka", {"kg": r"kg"}, "kg", "100", "kg"), # Hodnota ano, jednotka ne, ale je default
+    # Složitější regexy pro jednotky
+    ("Puls 55 tepů/minutu", " ", {"/min": r"tep[uů](/min|/minutu)|bpm"}, "/min", "55", "/min"),
+    ("Váha pacienta: 82 kg.", "", {"kg": r"kg"}, None, "82", "kg"),
+])
+def test_extract_value_and_unit_from_nlp_entity_text(
+    entity_text, surrounding_text, unit_regex_map, default_unit, expected_value, expected_unit
+):
+    value, unit = fhir_mapper.extract_value_and_unit_from_nlp_entity_text(
+        entity_text, surrounding_text, unit_regex_map, default_unit
+    )
+    assert value == expected_value
+    assert unit == expected_unit
+
+# --- Testovací třída/sada testů pro parse_observation_data (krevní tlak) s NLP ---
+class TestParseObservationDataNLP:
+    @pytest.mark.parametrize("test_id, text_input, nlp_entities, expected_bp_value, use_regex_fallback_expected", [
+        (
+            "nlp_ok_exact",
+            "TK 130/80 mmHg",
+            [
+                {"text": "130", "type": "CARDINAL", "start_char": 3, "end_char": 6},
+                {"text": "80", "type": "CARDINAL", "start_char": 7, "end_char": 9}
+            ],
+            "130/80",
+            False
+        ),
+        (
+            "nlp_ok_krevni_tlak",
+            "Krevní tlak: 140 / 90 mmHg",
+            [
+                {"text": "140", "type": "NUMBER", "start_char": 13, "end_char": 16},
+                {"text": "90", "type": "NUMBER", "start_char": 19, "end_char": 21}
+            ],
+            "140/90",
+            False
+        ),
+        (
+            "nlp_one_entity_fallback_regex", # NLP najde jen jedno číslo, měl by následovat regex fallback
+            "TK 150 a nějaký další text 150/95 mmHg", # Globální regex najde 150/95
+            [
+                {"text": "150", "type": "CARDINAL", "start_char": 3, "end_char": 6}
+                # Chybí druhá entita pro diastolický tlak blízko TK
+            ],
+            "150/95", # Očekáváme hodnotu z regexu
+            True
+        ),
+        (
+            "nlp_entities_far_fallback_regex", # NLP entity jsou příliš daleko od klíčového slova
+            "TK je v normě. Později naměřeno 120/70.",
+            [
+                {"text": "120", "type": "CARDINAL", "start_char": 30, "end_char": 33},
+                {"text": "70", "type": "CARDINAL", "start_char": 34, "end_char": 36}
+            ],
+            "120/70", # Očekáváme hodnotu z regexu, protože NLP entity nejsou v okně za "TK"
+            True
+        ),
+        (
+            "no_nlp_entities_fallback_regex",
+            "Tlak krve: 160/100",
+            [], # Žádné NLP entity
+            "160/100",
+            True
+        ),
+         (
+            "nlp_values_with_text_inside",
+            "TK: cca 125 / skoro 75 mmHg",
+            [
+                {"text": "cca 125", "type": "NUMBER", "start_char": 8, "end_char": 15}, # "TK: cca " je 8 znaků
+                {"text": "skoro 75", "type": "NUMBER", "start_char": 18, "end_char": 26}
+            ],
+            "125/75",
+            False
+        ),
+    ])
+    def test_parse_blood_pressure_nlp_and_fallback(self, test_id, text_input, nlp_entities, expected_bp_value, use_regex_fallback_expected, capsys):
+        # Přidáme nlp_entities do text_input pro úplnost, i když je mockujeme
+        # Je důležité, aby start_char a end_char odpovídaly text_input
+
+        result = fhir_mapper.parse_observation_data(nlp_entities, text_input)
+
+        if expected_bp_value:
+            assert result.get("blood_pressure_value") == expected_bp_value
+            assert result.get("measurement_time_fhir") is not None
+        else:
+            assert result.get("blood_pressure_value") is None
+
+        captured = capsys.readouterr()
+        if use_regex_fallback_expected:
+            assert "Nalezen krevní tlak (Regex fallback)" in captured.out or \
+                   "Krevní tlak nenalezen ani pomocí NLP, ani pomocí Regex" in captured.out
+        else:
+            assert "Nalezen krevní tlak (NLP)" in captured.out
+            assert "Nalezen krevní tlak (Regex fallback)" not in captured.out
+
+
+# --- Testovací třída/sada testů pro parse_vital_signs_data s NLP ---
+class TestParseVitalSignsDataNLP:
+    # Testy pro PULZ
+    @pytest.mark.parametrize("test_id, text_input, nlp_entities, expected_value, expected_unit, log_check", [
+        ("pulse_nlp_direct", "Pulz: 75/min.", [{"text": "75/min", "type": "CARDINAL", "start_char": 6, "end_char": 12}], "75", "/min", "Nalezen Pulz (NLP)"),
+        ("pulse_nlp_separate_unit", "SF 80 tepů/min", [{"text": "80", "type": "NUMBER", "start_char": 3, "end_char": 5}], "80", "/min", "Nalezen Pulz (NLP)"),
+        ("pulse_nlp_context_regex", "P: 90, ale divně", [{"text": "90", "type": "CARDINAL", "start_char": 3, "end_char": 5}], "90", "/min", "Nalezen Pulz (Kontextový Regex fallback)"), # Předpoklad: '/min' není v okolí pro NLP, ale regex to chytí
+        ("pulse_global_regex", "Srdeční akce byla 65 /min.", [], "65", "/min", "Nalezen Pulz (Globální Regex fallback)"),
+        ("pulse_no_value", "Pulz: není", [], None, None, "Pulz nenalezen"),
+        ("pulse_nlp_entity_no_unit_finds_default", "Puls 120", [{"text": "120", "type": "CARDINAL", "start_char": 5, "end_char": 8}], "120", "/min", "Nalezen Pulz (NLP)"), # default /min
+    ])
+    def test_parse_pulse_nlp(self, test_id, text_input, nlp_entities, expected_value, expected_unit, log_check, capsys):
+        result = fhir_mapper.parse_vital_signs_data(nlp_entities, text_input)
+        assert result.get("pulse_value") == expected_value
+        assert result.get("pulse_unit") == expected_unit
+        if log_check:
+            captured = capsys.readouterr()
+            assert log_check in captured.out
+
+    # Testy pro TEPLOTU
+    @pytest.mark.parametrize("test_id, text_input, nlp_entities, expected_value, expected_unit, log_check", [
+        ("temp_nlp_direct", "Teplota: 37,5°C", [{"text": "37,5°C", "type": "NUMBER", "start_char": 9, "end_char": 15}], "37.5", "°C", "Nalezena Teplota (NLP)"),
+        ("temp_nlp_separate_unit", "T 36.8 stupňů C", [{"text": "36.8", "type": "CARDINAL", "start_char": 2, "end_char": 6}], "36.8", "°C", "Nalezena Teplota (NLP)"),
+        ("temp_nlp_context_regex", "Teplota naměřena 37 C", [{"text": "37", "type": "NUMBER", "start_char": 17, "end_char": 19}], "37", "°C", "Nalezena Teplota (Kontextový Regex fallback)"),
+        ("temp_global_regex", "Pacient afebrilní, TT 36,9C.", [], "36.9", "°C", "Nalezena Teplota (Globální Regex fallback)"),
+        ("temp_no_value", "Teplota: neměřena", [], None, None, "Teplota nenalezena"),
+    ])
+    def test_parse_temperature_nlp(self, test_id, text_input, nlp_entities, expected_value, expected_unit, log_check, capsys):
+        result = fhir_mapper.parse_vital_signs_data(nlp_entities, text_input)
+        assert result.get("temperature_value") == expected_value
+        assert result.get("temperature_unit") == expected_unit
+        if log_check:
+            captured = capsys.readouterr()
+            assert log_check in captured.out
+
+    # Testy pro VÝŠKU
+    @pytest.mark.parametrize("test_id, text_input, nlp_entities, expected_value, expected_unit, log_check", [
+        ("height_nlp_direct", "Výška: 180cm.", [{"text": "180cm", "type": "QUANTITY", "start_char": 7, "end_char": 12}], "180", "cm", "Nalezena Výška (NLP)"),
+        ("height_nlp_separate_unit", "Výš. 175 cm", [{"text": "175", "type": "NUMBER", "start_char": 6, "end_char": 9}], "175", "cm", "Nalezena Výška (NLP)"),
+        ("height_nlp_context_regex", "Výška pacienta 190cm", [{"text": "190", "type": "CARDINAL", "start_char": 16, "end_char": 19}], "190", "cm", "Nalezena Výška (Kontextový Regex fallback)"), # NLP entita je jen "190", "cm" je hned za ní
+        ("height_global_regex", "Měří asi 165 cm.", [], "165", "cm", "Nalezena Výška (Globální Regex fallback)"),
+        ("height_no_value", "Výška: neuvedena", [], None, None, "Výška nenalezena"),
+    ])
+    def test_parse_height_nlp(self, test_id, text_input, nlp_entities, expected_value, expected_unit, log_check, capsys):
+        result = fhir_mapper.parse_vital_signs_data(nlp_entities, text_input)
+        assert result.get("height_value") == expected_value
+        assert result.get("height_unit") == expected_unit
+        if log_check:
+            captured = capsys.readouterr()
+            assert log_check in captured.out
+
+    # Testy pro HMOTNOST
+    @pytest.mark.parametrize("test_id, text_input, nlp_entities, expected_value, expected_unit, log_check", [
+        ("weight_nlp_direct", "Hmotnost: 75.5kg", [{"text": "75.5kg", "type": "QUANTITY", "start_char": 10, "end_char": 16}], "75.5", "kg", "Nalezena Hmotnost (NLP)"),
+        ("weight_nlp_separate_unit", "Hm. 82 kg.", [{"text": "82", "type": "NUMBER", "start_char": 4, "end_char": 6}], "82", "kg", "Nalezena Hmotnost (NLP)"),
+        ("weight_nlp_context_regex", "Váha aktuálně 91 kg", [{"text": "91", "type": "CARDINAL", "start_char": 14, "end_char": 16}], "91", "kg", "Nalezena Hmotnost (Kontextový Regex fallback)"),
+        ("weight_global_regex", "Pacient váží 68kg.", [], "68", "kg", "Nalezena Hmotnost (Globální Regex fallback)"),
+        ("weight_no_value", "Hmotnost: neznámá", [], None, None, "Hmotnost nenalezena"),
+    ])
+    def test_parse_weight_nlp(self, test_id, text_input, nlp_entities, expected_value, expected_unit, log_check, capsys):
+        result = fhir_mapper.parse_vital_signs_data(nlp_entities, text_input)
+        assert result.get("weight_value") == expected_value
+        assert result.get("weight_unit") == expected_unit
+        if log_check:
+            captured = capsys.readouterr()
+            assert log_check in captured.out
+
+# --- Testy pro vylepšené chování parse_patient_data ---
+class TestParsePatientDataNLPContext:
+    def test_parse_patient_name_multiple_P_entities(self, capsys):
+        text_input = "Pacient: Jan Novák. Ošetřující lékař: MUDr. Petr Svoboda."
+        # Lékař je také typu 'P', ale dále od klíčového slova "Pacient:"
+        nlp_entities = [
+            {"text": "Jan Novák", "type": "P", "start_char": 9, "end_char": 18}, # Pacient
+            {"text": "MUDr. Petr Svoboda", "type": "P", "start_char": 42, "end_char": 60} # Lékař
+        ]
+        expected_name = "Jan Novák"
+
+        result = fhir_mapper.parse_patient_data(nlp_entities, text_input)
+        assert result.get("full_name") == expected_name
+        captured = capsys.readouterr()
+        assert f"Vybrána entita 'P' '{expected_name}' na základě blízkosti ke klíčovému slovu." in captured.out
+
+    def test_parse_birth_date_multiple_T_entities(self, capsys):
+        text_input = "Datum narození: 1.1.1990. Datum vyšetření: 15.3.2023."
+        nlp_entities = [
+            {"text": "1.1.1990", "type": "DATE", "start_char": 16, "end_char": 24}, # Datum narození
+            {"text": "15.3.2023", "type": "DATE", "start_char": 44, "end_char": 53}  # Datum vyšetření
+        ]
+        expected_date_fhir = "1990-01-01"
+        expected_date_raw = "1.1.1990"
+
+        result = fhir_mapper.parse_patient_data(nlp_entities, text_input)
+        assert result.get("birth_date_fhir") == expected_date_fhir
+        assert result.get("birth_date_raw") == expected_date_raw
+        captured = capsys.readouterr()
+        assert f"Vybrána NLP entita data narození '{expected_date_raw}'" in captured.out
+        assert f"Nalezeno datum narození (NLP): {expected_date_raw} -> {expected_date_fhir}" in captured.out
+
+# --- Testy pro vylepšené chování parse_condition_data ---
+class TestParseConditionDataNLPContext:
+    def test_parse_condition_multiple_DIS_entities_merged(self, capsys):
+        text_input = "Diagnóza: Diabetes mellitus, ICHS. Další diagnóza: Hypertenze."
+        # NLP entity pro "Diabetes mellitus" a "ICHS" jsou blízko a měly by se spojit
+        nlp_entities = [
+            {"text": "Diabetes mellitus", "type": "DIS", "start_char": 10, "end_char": 27},
+            {"text": "ICHS", "type": "DIS", "start_char": 29, "end_char": 33}, # Navazuje po ", "
+            {"text": "Hypertenze", "type": "DIS", "start_char": 53, "end_char": 63} # Dále
+        ]
+        expected_diagnosis = "Diabetes mellitus, ICHS"
+
+        result = fhir_mapper.parse_condition_data(nlp_entities, text_input)
+        assert result.get("diagnosis_text") == expected_diagnosis
+        captured = capsys.readouterr()
+        assert "Spojuji DIS entitu 'Diabetes mellitus' s 'ICHS'" in captured.out
+        assert f"Nalezena diagnóza (NLP, spojené/rozšířené DIS): '{expected_diagnosis}'" in captured.out
+
+    def test_parse_condition_dis_experimental_extension(self, capsys):
+        text_input = "Závěr: Infekce horních cest dýchacích." # Tečka je součástí
+        nlp_entities = [
+            # NLP entita končí před tečkou
+            {"text": "Infekce horních cest dýchacích", "type": "DIS", "start_char": 7, "end_char": 37}
+        ]
+        # Očekáváme, že experimentální rozšíření přidá tečku
+        expected_diagnosis = "Infekce horních cest dýchacích."
+
+        result = fhir_mapper.parse_condition_data(nlp_entities, text_input)
+        assert result.get("diagnosis_text") == expected_diagnosis
+        captured = capsys.readouterr()
+        assert f"Experimentální rozšíření textu diagnózy na: '{expected_diagnosis}'" in captured.out
+
+    def test_parse_condition_single_dis_no_merge_needed(self, capsys):
+        text_input = "Dg.: Hypertenze esenciální."
+        nlp_entities = [
+            {"text": "Hypertenze esenciální", "type": "DIS", "start_char": 5, "end_char": 26}
+        ]
+        expected_diagnosis = "Hypertenze esenciální" # Tečka je odstraněna finálním čištěním
+
+        result = fhir_mapper.parse_condition_data(nlp_entities, text_input)
+        assert result.get("diagnosis_text") == expected_diagnosis
+        captured = capsys.readouterr()
+        # Očekáváme log pro jednu DIS entitu, ne pro spojování
+        assert "Nalezena diagnóza (NLP, jedna DIS entita)" in captured.out
+        assert "Spojuji DIS entitu" not in captured.out

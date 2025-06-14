@@ -79,6 +79,170 @@ REGEX_DIAGNOSIS_TEXT = r"(?:Diagnóza|Dg\.|Závěr)\s*:\s*(.+?)(?:\s*\n\s*|\Z|Po
 
 # --- Pomocné (Helper) funkce pro parsování ---
 
+def find_nlp_entities_near_keyword(
+    text_segment_for_search: str,
+    nlp_entities: List[Dict[str, Any]],
+    keyword_patterns: List[str],
+    target_entity_types: List[str],
+    window_size: int = 30,
+    search_after_keyword: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Vyhledá NLP entity daného typu v textovém segmentu v určitém okně okolo pozice klíčového slova.
+
+    Args:
+        text_segment_for_search: Textový segment, ve kterém se hledají klíčová slova a entity.
+                                 Pozice entit (start_char, end_char) musí být relativní k tomuto segmentu
+                                 nebo k celému dokumentu, pokud jsou entity filtrovány předem.
+        nlp_entities: Seznam všech NLP entit pro daný text. Pozice entit by měly být
+                      absolutní vzhledem k původnímu textu, ze kterého `text_segment_for_search` pochází.
+        keyword_patterns: Seznam regex vzorů pro identifikaci klíčových slov.
+        target_entity_types: Seznam typů NLP entit, které se mají hledat (např. ['CARDINAL', 'NUMBER']).
+        window_size: Velikost okna (počet znaků) za/před klíčovým slovem, ve kterém se hledají entity.
+        search_after_keyword: True pro hledání za klíčovým slovem, False pro hledání před.
+
+    Returns:
+        Seznam nalezených NLP entit, seřazených podle jejich pozice.
+    """
+    found_entities_details = []
+    processed_text_segment = text_segment_for_search # Může být již normalizovaný (např. lowercase)
+
+    for keyword_pattern in keyword_patterns:
+        try:
+            # Hledáme všechny výskyty klíčového slova
+            for match in re.finditer(keyword_pattern, processed_text_segment, re.IGNORECASE):
+                keyword_start, keyword_end = match.span()
+
+                # Definice oblasti hledání entit na základě pozice klíčového slova
+                if search_after_keyword:
+                    search_window_start = keyword_end
+                    search_window_end = keyword_end + window_size
+                else: # Hledání před klíčovým slovem
+                    search_window_start = max(0, keyword_start - window_size)
+                    search_window_end = keyword_start
+
+                # Filtrování a sběr entit v definovaném okně
+                # Předpokládáme, že nlp_entities mají 'start_char' a 'end_char' absolutní k originálnímu textu.
+                # Pokud text_segment_for_search je jen částí originálního textu,
+                # musíme buď upravit pozice entit, nebo zajistit, že `nlp_entities`
+                # jsou již relevantní pro `text_segment_for_search` a jejich pozice jsou upraveny.
+                # Pro jednoduchost zde předpokládáme, že `text_segment_for_search` je celý text
+                # a `nlp_entities` mají absolutní pozice.
+                # Pokud by `text_segment_for_search` byl podřetězec, museli bychom upravit
+                # `search_window_start` a `search_window_end` tak, aby odpovídaly absolutním pozicím,
+                # nebo filtrovat a upravovat pozice entit.
+
+                # Tento příklad předpokládá, že `text_segment_for_search` JE celý text,
+                # a `nlp_entities` mají absolutní pozice.
+                candidate_entities = []
+                for entity in nlp_entities:
+                    entity_type = entity.get('type')
+                    entity_start = entity.get('start_char')
+                    entity_end = entity.get('end_char')
+
+                    if entity_type in target_entity_types and \
+                       entity_start is not None and entity_end is not None:
+                        # Kontrola, zda entita spadá do vyhledávacího okna
+                        if entity_start >= search_window_start and entity_end <= search_window_end:
+                            candidate_entities.append(entity)
+                        # Případ, kdy entita začíná v okně, ale končí mimo (částečný překryv)
+                        elif entity_start >= search_window_start and entity_start < search_window_end:
+                             candidate_entities.append(entity)
+                        # Případ, kdy entita končí v okně, ale začíná před (částečný překryv)
+                        elif entity_end > search_window_start and entity_end <= search_window_end:
+                             candidate_entities.append(entity)
+                        # Případ, kdy entita zcela obklopuje okno (méně časté pro krátká okna)
+                        elif entity_start < search_window_start and entity_end > search_window_end:
+                             candidate_entities.append(entity)
+
+
+                # Seřadíme nalezené kandidáty podle jejich pozice a přidáme je
+                # (pokud jich je více, vrátí se všechny relevantní z tohoto okna)
+                # Odstranění duplikátů, pokud by se nějaké objevily (např. z překrývajících se klíč. slov)
+                for ent in sorted(candidate_entities, key=lambda x: x['start_char']):
+                    if ent not in found_entities_details:
+                        found_entities_details.append(ent)
+
+        except re.error as e:
+            print(f"DEBUG [FHIR Mapper]: Chyba regexu v find_nlp_entities_near_keyword pro vzor '{keyword_pattern}': {e}")
+            continue # Pokračujeme s dalším vzorem
+
+    # Finální seřazení všech nalezených entit z různých klíčových slov/oken
+    return sorted(found_entities_details, key=lambda x: x['start_char'])
+
+
+def extract_value_and_unit_from_nlp_entity_text(
+    entity_text: str,
+    surrounding_text: str, # Text okolo entity pro lepší detekci jednotek
+    unit_regex_map: Dict[str, str],
+    default_unit: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Pokusí se z textu NLP entity a jejího okolí extrahovat číselnou hodnotu a její jednotku.
+
+    Args:
+        entity_text: Text samotné NLP entity (očekává se, že obsahuje číselnou hodnotu).
+        surrounding_text: Text v okolí NLP entity (např. pár znaků/slov za ní),
+                          kde by se mohla nacházet jednotka.
+        unit_regex_map: Slovník, kde klíč je standardní jednotka (např. "kg")
+                        a hodnota je regex pro detekci této jednotky a jejích variant.
+        default_unit: Volitelná výchozí jednotka, pokud žádná není nalezena.
+
+    Returns:
+        Tuple (hodnota, jednotka). Hodnota je řetězec obsahující číslo (normalizované),
+        jednotka je standardizovaná jednotka z `unit_regex_map`.
+        Vrací (None, None) pokud nelze extrahovat hodnotu.
+        Vrací (hodnota, None) pokud je nalezena hodnota, ale žádná jednotka (a není default_unit).
+        Vrací (hodnota, default_unit) pokud je nalezena hodnota, žádná explicitní jednotka, ale je default_unit.
+    """
+    # 1. Extrakce číselné hodnoty z textu entity
+    #    Regex hledá čísla, která mohou být celá nebo desetinná (s tečkou nebo čárkou).
+    #    Může být na začátku, uprostřed nebo na konci textu entity.
+    value_match = re.search(r'(\d+([\.,]\d+)?)', entity_text)
+    if not value_match:
+        print(f"DEBUG [FHIR Mapper]: extract_value_and_unit: Hodnota nenalezena v textu entity '{entity_text}'.")
+        return None, None
+
+    extracted_value_str = value_match.group(1)
+    # Normalizace desetinné čárky na tečku
+    normalized_value_str = extracted_value_str.replace(',', '.')
+
+    # 2. Hledání jednotky v textu entity samotné nebo v jejím blízkém okolí
+    #    Kombinujeme text entity a okolní text pro hledání jednotky,
+    #    protože jednotka může být přímo za číslem v entitě, nebo těsně za ní.
+    #    Dáváme přednost jednotce nalezené blíže k hodnotě.
+    search_text_for_unit = entity_text[value_match.end():].strip() + " " + surrounding_text.strip()
+    search_text_for_unit = search_text_for_unit.strip() # Odstranění přebytečných mezer
+
+    found_unit = None
+    # Iterujeme přes mapu jednotek a jejich regexů
+    for standard_unit, unit_regex_pattern in unit_regex_map.items():
+        try:
+            # Hledáme na začátku kombinovaného textu (entity_suffix + surrounding_text)
+            # Používáme re.match, abychom zajistili, že jednotka následuje těsně.
+            # Pokud by jednotka mohla být oddělena mezerou, regex by to měl zahrnovat (např. r"\s*kg")
+            # nebo bychom museli použít re.search a kontrolovat pozici.
+            # Pro jednoduchost zde předpokládáme, že regexy v unit_regex_map
+            # jsou navrženy tak, aby odpovídaly jednotkám na začátku `search_text_for_unit`.
+            unit_match = re.search(r"^\s*" + unit_regex_pattern, search_text_for_unit, re.IGNORECASE)
+            if unit_match:
+                found_unit = standard_unit
+                print(f"DEBUG [FHIR Mapper]: extract_value_and_unit: Nalezena jednotka '{found_unit}' pro hodnotu '{normalized_value_str}' v textu '{search_text_for_unit}' (vzor: '{unit_regex_pattern}').")
+                break # Našli jsme jednotku, můžeme přestat hledat
+        except re.error as e:
+            print(f"DEBUG [FHIR Mapper]: Chyba regexu v extract_value_and_unit_from_nlp_entity_text pro vzor jednotky '{unit_regex_pattern}': {e}")
+            continue
+
+    if not found_unit and default_unit:
+        found_unit = default_unit
+        print(f"DEBUG [FHIR Mapper]: extract_value_and_unit: Jednotka nenalezena explicitně, použita výchozí jednotka '{default_unit}' pro hodnotu '{normalized_value_str}'.")
+    elif not found_unit:
+        print(f"DEBUG [FHIR Mapper]: extract_value_and_unit: Jednotka nenalezena a není výchozí pro hodnotu '{normalized_value_str}' v textu '{search_text_for_unit}'.")
+
+
+    return normalized_value_str, found_unit
+
+
 def parse_date_to_fhir_format(date_str: str) -> str | None:
     """
     Parsování data z různých českých textových formátů na FHIR standardní formát (YYYY-MM-DD).
@@ -406,47 +570,153 @@ def parse_patient_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) 
     found_name_by_nlp = False
     found_birth_date_by_nlp = False
 
-    if nlp_entities:
-        # Extrakce jména pacienta pomocí NLP
-        person_entities = [ent for ent in nlp_entities if ent.get('type') == 'P']
-        if person_entities:
-            main_person_entity = next((ent for ent in nlp_entities if ent.get('type') == 'P'), None)
-            if main_person_entity:
-                patient_data["full_name"] = main_person_entity['text'].strip()
+    # Klíčová slova pro identifikaci sekcí relevantních pro jméno a datum narození pacienta
+    patient_name_keywords = [
+        r"Pacient(?:ka)?\s*:", r"Jméno pacienta\s*:", r"Vyšetřovan(?:ý|á)\s*:"
+    ]
+    birth_date_keywords = [
+        r"Datum narození\s*:", r"Nar\.\s*:", r"Narozena\s*:", r"Dat\. nar\.\s*:", r"Narozen\(a\)\s*:"
+    ]
+    # Maximální vzdálenost entity od klíčového slova, aby byla považována za relevantní
+    keyword_proximity_window = 50 # Počet znaků za klíčovým slovem
+
+    if nlp_entities and text:
+        # --- Extrakce jména pacienta pomocí NLP ---
+        person_entities_P = [ent for ent in nlp_entities if ent.get('type') == 'P']
+        atomic_name_parts_entities = [ent for ent in nlp_entities if ent.get('type') in ['pt', 'pf', 'ps', 'pd']]
+        atomic_name_parts_entities.sort(key=lambda x: x['start_char'])
+
+        selected_person_entity = None
+
+        if person_entities_P:
+            print(f"DEBUG [FHIR Mapper]: parse_patient_data: Nalezeno {len(person_entities_P)} entit typu 'P'. Hledání nejrelevantnější...")
+            relevant_P_entities_near_keywords = []
+            for kw_pattern in patient_name_keywords:
+                for kw_match in re.finditer(kw_pattern, text, re.IGNORECASE):
+                    kw_end_pos = kw_match.end()
+                    for p_ent in person_entities_P:
+                        # Entita by měla začínat po klíčovém slově a v definovaném okně
+                        if p_ent['start_char'] >= kw_end_pos and \
+                           p_ent['start_char'] < kw_end_pos + keyword_proximity_window:
+                            distance = p_ent['start_char'] - kw_end_pos
+                            relevant_P_entities_near_keywords.append({'entity': p_ent, 'distance': distance})
+
+            if relevant_P_entities_near_keywords:
+                relevant_P_entities_near_keywords.sort(key=lambda x: x['distance'])
+                selected_person_entity = relevant_P_entities_near_keywords[0]['entity']
+                print(f"DEBUG [FHIR Mapper]: Vybrána entita 'P' '{selected_person_entity['text']}' na základě blízkosti ke klíčovému slovu.")
+            elif person_entities_P: # Pokud žádná není blízko klíč. slov, vezmeme první dle dokumentu
+                person_entities_P.sort(key=lambda x: x['start_char'])
+                selected_person_entity = person_entities_P[0]
+                print(f"DEBUG [FHIR Mapper]: Žádná entita 'P' nebyla blízko klíčových slov. Vybrána první entita 'P' v dokumentu: '{selected_person_entity['text']}'.")
+
+            if selected_person_entity:
+                patient_data["full_name"] = selected_person_entity['text'].strip()
                 found_name_by_nlp = True
                 print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (NLP typ P): {patient_data['full_name']}")
+
+        if not found_name_by_nlp and atomic_name_parts_entities:
+            # Logika pro skládaná jména, preferujeme části blízko klíčových slov
+            print(f"DEBUG [FHIR Mapper]: parse_patient_data: Pokus o sestavení jména z atomických částí ({len(atomic_name_parts_entities)} nalezeno).")
+            relevant_atomic_parts = []
+            # Pokud máme kontext klíčových slov, zkusíme filtrovat atomické části
+            # Tento výběr je složitější, protože části jména mohou být rozptýlené.
+            # Pro zjednodušení: pokud existuje 'selected_person_entity' (i když třeba nebylo použito),
+            # můžeme se pokusit hledat atomické části v jeho okolí.
+            # Nebo jednoduše vezmeme ty, které jsou blízko jakémukoliv patient_name_keyword.
+
+            # Prozatím zjednodušená logika: Sestavíme jméno z částí, které jsou blízko sebe.
+            # Ideálně bychom chtěli identifikovat "hlavní" blok jména.
+            current_person_parts = []
+            # Hledáme první sadu atomických částí, které jsou blízko nějakému klíčovému slovu,
+            # nebo pokud takové nejsou, tak první sadu na začátku dokumentu.
+            # Tento kód je z původní verze a může být dále vylepšen kontextovým filtrováním.
+            # Zde by se hodila sofistikovanější logika pro seskupování částí jména.
+            # Prozatím ponecháme původní logiku seskupování, ale s vědomím možného vylepšení.
+
+            # Zkusíme najít první atomickou část, která je blízko klíčového slova
+            first_relevant_atomic_part_index = -1
+            if patient_name_keywords and text:
+                 for kw_pattern in patient_name_keywords:
+                    for kw_match in re.finditer(kw_pattern, text, re.IGNORECASE):
+                        kw_end_pos = kw_match.end()
+                        for idx, atom_ent in enumerate(atomic_name_parts_entities):
+                            if atom_ent['start_char'] >= kw_end_pos and \
+                               atom_ent['start_char'] < kw_end_pos + keyword_proximity_window:
+                                if first_relevant_atomic_part_index == -1 or idx < first_relevant_atomic_part_index:
+                                    first_relevant_atomic_part_index = idx
+                        if first_relevant_atomic_part_index != -1: break
+                    if first_relevant_atomic_part_index != -1: break
+
+            start_index_for_assembly = 0
+            if first_relevant_atomic_part_index != -1:
+                start_index_for_assembly = first_relevant_atomic_part_index
+                print(f"DEBUG [FHIR Mapper]: Začínám sestavovat jméno z atomických částí od indexu {start_index_for_assembly} (blízko klíč. slova).")
             else:
-                sorted_name_parts_entities = sorted(
-                    [ent for ent in nlp_entities if ent.get('type') in ['pt', 'pf', 'ps', 'pd']],
-                    key=lambda x: x['start_char']
-                )
-                current_person_parts = []
-                for ent in sorted_name_parts_entities:
-                    if not current_person_parts or ent['start_char'] < current_person_parts[-1]['end_char'] + 5:
-                        current_person_parts.append(ent)
-                    else:
+                print(f"DEBUG [FHIR Mapper]: Žádné atomické části jména nebyly blízko klíč. slov. Sestavuji od začátku seřazených atom. částí.")
+
+            for i in range(start_index_for_assembly, len(atomic_name_parts_entities)):
+                ent = atomic_name_parts_entities[i]
+                if not current_person_parts or ent['start_char'] < current_person_parts[-1]['end_char'] + 10: # Zvětšené okno pro mezery
+                    current_person_parts.append(ent)
+                else:
+                    # Pokud narazíme na větší mezeru, a už máme nějaké části, ukončíme.
+                    if current_person_parts:
                         break
-                if current_person_parts:
-                    assembled_name_text = " ".join([p['text'] for p in current_person_parts])
-                    patient_data["full_name"] = assembled_name_text.strip()
-                    found_name_by_nlp = True
-                    print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (NLP atomické typy): {patient_data['full_name']}")
 
-        # Extrakce data narození pomocí NLP
-        date_entities_nlp = [ent for ent in nlp_entities if ent.get('type') in ['T', 'DATE', 'td', 'tm', 'ty']]
-        date_entities_nlp.sort(key=lambda x: x['start_char'])
-        for ent in date_entities_nlp:
-            if ent.get('type') in ['T', 'DATE']:
-                raw_date_nlp = ent['text'].strip()
-                parsed_date_nlp = parse_date_to_fhir_format(raw_date_nlp)
-                if parsed_date_nlp:
-                    patient_data["birth_date_fhir"] = parsed_date_nlp
-                    patient_data["birth_date_raw"] = raw_date_nlp
-                    found_birth_date_by_nlp = True
-                    print(f"DEBUG [FHIR Mapper]: Nalezeno datum narození (NLP): {raw_date_nlp} -> {parsed_date_nlp}")
-                    break
+            if current_person_parts:
+                assembled_name_text = " ".join([p['text'] for p in current_person_parts])
+                patient_data["full_name"] = assembled_name_text.strip()
+                found_name_by_nlp = True
+                print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (NLP atomické typy): {patient_data['full_name']}")
 
-    # Fallback na Regex pro jméno, pokud NLP nenašlo
+        # --- Extrakce data narození pomocí NLP ---
+        # Entity typu 'T' (čas), 'DATE' (obecné datum), 'td', 'tm', 'ty' (den, měsíc, rok)
+        date_candidate_nlp_entities = [ent for ent in nlp_entities if ent.get('type') in ['T', 'DATE', 'td', 'tm', 'ty']]
+        date_candidate_nlp_entities.sort(key=lambda x: x['start_char'])
+
+        selected_date_entity_text = None
+
+        if date_candidate_nlp_entities:
+            print(f"DEBUG [FHIR Mapper]: parse_patient_data: Nalezeno {len(date_candidate_nlp_entities)} kandidátských NLP entit pro datum narození.")
+            relevant_date_entities = []
+            for kw_pattern in birth_date_keywords:
+                for kw_match in re.finditer(kw_pattern, text, re.IGNORECASE):
+                    kw_end_pos = kw_match.end()
+                    for date_ent in date_candidate_nlp_entities:
+                        # Preferujeme entity typu T nebo DATE, pokud jsou dostupné
+                        # a nacházejí se v okně za klíčovým slovem.
+                        if date_ent.get('type') in ['T', 'DATE'] and \
+                           date_ent['start_char'] >= kw_end_pos and \
+                           date_ent['start_char'] < kw_end_pos + keyword_proximity_window:
+                            distance = date_ent['start_char'] - kw_end_pos
+                            relevant_date_entities.append({'entity': date_ent, 'distance': distance})
+
+            if relevant_date_entities:
+                relevant_date_entities.sort(key=lambda x: x['distance'])
+                selected_date_entity_text = relevant_date_entities[0]['entity']['text'].strip()
+                print(f"DEBUG [FHIR Mapper]: Vybrána NLP entita data narození '{selected_date_entity_text}' (typ: {relevant_date_entities[0]['entity']['type']}) na základě blízkosti ke klíčovému slovu.")
+            elif date_candidate_nlp_entities:
+                # Fallback: Pokud žádná entita není blízko klíč. slov, zkusíme první 'T' nebo 'DATE'
+                first_general_date_entity = next((e for e in date_candidate_nlp_entities if e.get('type') in ['T', 'DATE']), None)
+                if first_general_date_entity:
+                    selected_date_entity_text = first_general_date_entity['text'].strip()
+                    print(f"DEBUG [FHIR Mapper]: Žádná entita data nenalezena blízko klíč. slov. Vybrána první obecná entita data (T/DATE): '{selected_date_entity_text}'.")
+                # TODO: Zvážit sestavení data z atomických částí (td, tm, ty), pokud nejsou 'T'/'DATE' entity.
+                # Toto je komplexnější a prozatím vynecháno.
+
+        if selected_date_entity_text:
+            parsed_date_nlp = parse_date_to_fhir_format(selected_date_entity_text)
+            if parsed_date_nlp:
+                patient_data["birth_date_fhir"] = parsed_date_nlp
+                patient_data["birth_date_raw"] = selected_date_entity_text
+                found_birth_date_by_nlp = True
+                print(f"DEBUG [FHIR Mapper]: Nalezeno datum narození (NLP): {selected_date_entity_text} -> {parsed_date_nlp}")
+            else:
+                print(f"DEBUG [FHIR Mapper]: NLP entita data '{selected_date_entity_text}' se nepodařila parsovat.")
+
+
+    # Fallback na Regex pro jméno, pokud NLP nenašlo nebo selhalo
     if not found_name_by_nlp and text:
         name_match = re.search(REGEX_PATIENT_NAME, text, re.IGNORECASE)
         if name_match:
@@ -503,54 +773,143 @@ def parse_observation_data(nlp_entities: Optional[List[Dict[str, Any]]], text: s
         - "blood_pressure_value": Hodnota krevního tlaku (např. "120/80").
         - "measurement_time_fhir": Čas měření ve FHIR formátu (ISO).
     """
-    observation_data = {} # Inicializace prázdného slovníku
+    observation_data = {}
     found_bp_by_nlp = False
 
-    # Extrakce krevního tlaku
-    bp_match = re.search(REGEX_BLOOD_PRESSURE, text, re.IGNORECASE)
-    if bp_match:
-        bp_text_regex_capture = bp_match.group(1) # Text zachycený regexem, např. "120 / 80"
-        bp_value_from_regex = bp_text_regex_capture.replace(" ", "") # "120/80"
+    # Klíčová slova pro krevní tlak (TK)
+    # Regexy by měly být dostatečně specifické, aby se předešlo falešným pozitivům.
+    # Např. r"\bTK\b" zajistí, že "TK" je celé slovo.
+    bp_keywords = [r"\bTK\b", r"Krevní tlak", r"Krevni tlak"] # Přidána varianta bez diakritiky
+    # Typy NLP entit, které hledáme pro hodnoty TK (očekáváme čísla)
+    bp_target_entity_types = ['CARDINAL', 'NUMBER'] # Ověřit dle NLP modelu, zda 'NUM' nebo jiné nejsou relevantní
+    # Okno pro hledání hodnot za klíčovým slovem (v znacích)
+    # Např. "TK: 120/80" - okno cca 10-15 by mělo stačit.
+    # Větší okno, např. 20-30, pro případy jako "TK naměřen ... 120 / 80"
+    bp_nlp_window_size = 30
 
-        if nlp_entities:
-            # Pokus o nalezení dvou číselných entit v blízkosti klíčového slova TK nebo v rámci textu zachyceného regexem
-            # Toto je zjednodušený přístup: hledáme čísla v textu, který regex již označil za hodnotu TK.
-            # Získání pozic regex shody v původním textu.
-            regex_match_start, regex_match_end = bp_match.start(1), bp_match.end(1)
+    if nlp_entities and text: # Potřebujeme entity i původní text pro NLP přístup
+        print(f"DEBUG [FHIR Mapper]: parse_observation_data: Pokus o NLP extrakci krevního tlaku. Počet NLP entit: {len(nlp_entities)}")
+        # Iterujeme přes definovaná klíčová slova pro krevní tlak
+        for keyword_pattern in bp_keywords:
+            # Najdeme všechny výskyty klíčového slova v textu
+            # Používáme re.finditer, abychom získali pozice (start, end) každého výskytu
+            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
+                # Pro každý nalezený výskyt klíčového slova hledáme blízké číselné entity
+                # `keyword_match.end()` je pozice konce klíčového slova. Hledáme za ním.
+                # `text` je zde `original_text` s původní velikostí písmen.
+                # `nlp_entities` mají pozice `start_char`, `end_char` vztažené k `original_text`.
 
-            # Filtrujeme relevantní NLP entity (čísla) v rozsahu regex shody
-            relevant_nlp_entities = [
-                ent for ent in nlp_entities
-                if ent.get('type') in ['CARDINAL', 'NUMBER'] and # TODO: Ověřit typy entit pro čísla
-                   ent['start_char'] >= regex_match_start and ent['end_char'] <= regex_match_end
-            ]
-            relevant_nlp_entities.sort(key=lambda x: x['start_char'])
+                # Definovali jsme, že `find_nlp_entities_near_keyword` očekává,
+                # že `text_segment_for_search` je celý text, a `nlp_entities` mají absolutní pozice.
+                # To je zde splněno, protože `text` je celý originální text.
+                # Hledáme v okně *za* klíčovým slovem.
+                # Začátek okna je konec klíčového slova, konec okna je konec klíčového slova + window_size.
+                # `find_nlp_entities_near_keyword` interně filtruje entity, které spadají do tohoto okna.
 
-            if len(relevant_nlp_entities) >= 2:
-                # Máme alespoň dvě čísla, pokusíme se je interpretovat jako systolický/diastolický
-                # Předpokládáme, že jsou v pořadí systolický, pak diastolický.
-                systolic_nlp_text = relevant_nlp_entities[0]['text']
-                diastolic_nlp_text = relevant_nlp_entities[1]['text']
+                # Pro krevní tlak potřebujeme najít entity v oblasti za klíčovým slovem.
+                # `find_nlp_entities_near_keyword` již pracuje s `keyword_match.end()` pro `search_after_keyword=True`
+                # a interně si nastaví `search_window_start` a `search_window_end`.
+                # Důležité je, aby `nlp_entities` byly všechny dostupné entity z `text`.
 
-                # Základní validace, zda texty vypadají jako čísla
-                if systolic_nlp_text.replace('.','',1).isdigit() and diastolic_nlp_text.replace('.','',1).isdigit():
-                    # Odstraníme případné mezery a spojíme lomítkem
-                    bp_value_nlp = f"{systolic_nlp_text.strip()}/{diastolic_nlp_text.strip()}"
-                    observation_data["blood_pressure_value"] = bp_value_nlp
-                    found_bp_by_nlp = True
-                    print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak (NLP): {bp_value_nlp} (Systole: '{systolic_nlp_text}', Diastole: '{diastolic_nlp_text}')")
+                # Použijeme `find_nlp_entities_near_keyword` k nalezení entit v okně za klíčovým slovem.
+                # `text` je celý text, ve kterém NLP entity byly detekovány.
+                # Musíme předat `nlp_entities` tak, jak jsou (s absolutními pozicemi).
+                # `find_nlp_entities_near_keyword` by měl být volán jen jednou per keyword_pattern,
+                # ale iteruje přes všechny matche klíčového slova.
+                # Raději ho zavoláme jednou s celým textem a necháme ho najít všechny instance.
+                # NE, find_nlp_entities_near_keyword je navržen tak, že se volá pro KAŽDÝ match klíčového slova
+                # a hledá v jeho specifickém okolí.
 
-        if not found_bp_by_nlp:
+                # Úprava: find_nlp_entities_near_keyword by měla být volána pro každý `keyword_match`
+                # a měla by dostat `nlp_entities` a `text`.
+                # `keyword_match.end()` je konec aktuálního nalezeného klíčového slova.
+                # Oblast hledání bude (keyword_match.end(), keyword_match.end() + bp_nlp_window_size).
+                # `find_nlp_entities_near_keyword` si sama filtruje entity v tomto okně.
+
+                # Vytvoříme dočasný seznam klíčových slov jen s aktuálním vzorem,
+                # protože `find_nlp_entities_near_keyword` iteruje přes `keyword_patterns`.
+                # Toto není ideální, funkce by měla spíše přijímat jeden `keyword_match`.
+                # Prozatím to tak necháme, ale je to neefektivní.
+                # Lepší by bylo, kdyby `find_nlp_entities_near_keyword` přijala `keyword_match_object`
+                # a `nlp_entities`, a hledala jen v okolí tohoto jednoho matche.
+
+                # Refaktorovaný přístup: Iterujeme přes matche a pro každý voláme `find_nlp_entities_near_keyword`
+                # s tím, že `find_nlp_entities_near_keyword` by měla být schopna pracovat s jedním keyword_pattern
+                # a jedním textem, a najít všechny jeho instance.
+                # NEBO, předáme `keyword_match.span()` do funkce.
+
+                # Zůstaneme u původního návrhu `find_nlp_entities_near_keyword`, která iteruje přes `keyword_patterns`.
+                # Ale zde potřebujeme najít entity specificky pro *tento* `keyword_match`.
+                # Takže `find_nlp_entities_near_keyword` musíme upravit nebo použít jinak.
+
+                # JEDNODUŠŠÍ PŘÍSTUP PRO TEĎ:
+                # Pro aktuální `keyword_match`, definujeme search_start a search_end.
+                # A pak ručně filtrujeme `nlp_entities`.
+                search_start_offset = keyword_match.end()
+                search_end_offset = search_start_offset + bp_nlp_window_size
+
+                candidate_bp_entities = []
+                for entity in nlp_entities:
+                    if entity.get('type') in bp_target_entity_types and \
+                       entity['start_char'] >= search_start_offset and \
+                       entity['end_char'] <= search_end_offset:
+                        candidate_bp_entities.append(entity)
+
+                # Seřadíme je podle pozice
+                candidate_bp_entities.sort(key=lambda x: x['start_char'])
+
+                print(f"DEBUG [FHIR Mapper]: parse_observation_data: Pro klíčové slovo '{keyword_match.group(0)}' (pozice {keyword_match.span()}), "
+                      f"nalezeno {len(candidate_bp_entities)} kandidátských entit v okně [{search_start_offset}-{search_end_offset}]: {candidate_bp_entities}")
+
+                if len(candidate_bp_entities) >= 2:
+                    # Máme alespoň dvě číselné entity, předpokládáme systolický/diastolický.
+                    # Entity jsou již seřazeny.
+                    systolic_entity = candidate_bp_entities[0]
+                    diastolic_entity = candidate_bp_entities[1]
+
+                    systolic_text = systolic_entity['text'].strip()
+                    diastolic_text = diastolic_entity['text'].strip()
+
+                    # Základní validace, zda texty vypadají jako čísla
+                    # (může být zpřesněno, např. kontrola rozsahu)
+                    # Použijeme regex pro extrakci číselné hodnoty, abychom byli robustnější vůči textu jako "cca 120".
+                    systolic_val_match = re.search(r'\d+', systolic_text)
+                    diastolic_val_match = re.search(r'\d+', diastolic_text)
+
+                    if systolic_val_match and diastolic_val_match:
+                        s_val = systolic_val_match.group(0)
+                        d_val = diastolic_val_match.group(0)
+
+                        # Sestavení hodnoty krevního tlaku
+                        bp_value_nlp = f"{s_val}/{d_val}"
+                        observation_data["blood_pressure_value"] = bp_value_nlp
+                        observation_data["measurement_time_fhir"] = datetime.now().isoformat() # Aktuální čas
+                        found_bp_by_nlp = True
+                        print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak (NLP) pomocí klíč. slova '{keyword_match.group(0)}': {bp_value_nlp} (Systole: '{s_val}' z '{systolic_text}', Diastole: '{d_val}' z '{diastolic_text}')")
+                        break # Úspěšně nalezeno, přerušíme iteraci přes matche klíčového slova
+
+            if found_bp_by_nlp:
+                break # Úspěšně nalezeno, přerušíme iteraci přes typy klíčových slov
+
+    # Fallback na Regex, pokud NLP nenašlo krevní tlak nebo nebyly NLP entity k dispozici
+    if not found_bp_by_nlp and text: # Potřebujeme `text` pro regex
+        bp_match_regex = re.search(REGEX_BLOOD_PRESSURE, text, re.IGNORECASE)
+        if bp_match_regex:
+            bp_text_regex_capture = bp_match_regex.group(1) # Text zachycený regexem, např. "120 / 80"
+            # Odstranění mezer kolem lomítka
+            bp_value_from_regex = "/".join([part.strip() for part in bp_text_regex_capture.split('/')])
+
             observation_data["blood_pressure_value"] = bp_value_from_regex
+            observation_data["measurement_time_fhir"] = datetime.now().isoformat() # Aktuální čas
             print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak (Regex fallback): {observation_data['blood_pressure_value']}")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Krevní tlak nenalezen ani pomocí NLP, ani pomocí Regex.")
+    elif not text and not nlp_entities:
+         print(f"DEBUG [FHIR Mapper]: Krevní tlak nelze hledat - chybí text i NLP entity.")
+    elif not text and nlp_entities and not found_bp_by_nlp: # Máme NLP, ale nemáme text pro regex (nemělo by nastat)
+        print(f"DEBUG [FHIR Mapper]: Krevní tlak nenalezen pomocí NLP, a chybí text pro Regex fallback.")
 
-        # Předpokládáme aktuální čas měření, pokud není specifikován jinak
-        observation_data["measurement_time_fhir"] = datetime.now().isoformat()
-    else:
-        print(f"DEBUG [FHIR Mapper]: Krevní tlak nenalezen pomocí Regex.")
 
-    # Pokud by funkce parsovala více typů pozorování, log by byl zde obecnější.
-    # print(f"DEBUG [FHIR Mapper]: Parsed specific observation data: {observation_data}")
     return observation_data
 
 def parse_condition_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) -> dict:
@@ -566,30 +925,121 @@ def parse_condition_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str
         - "diagnosis_text": Extrahovaný text diagnózy.
         - "onset_date_time_fhir": Předpokládaný čas stanovení diagnózy (aktuální čas).
     """
-    condition_data = {} # Inicializace prázdného slovníku
+    condition_data = {}
     found_diagnosis_by_nlp = False
-    diagnosis_text_raw_nlp = None
 
-    if nlp_entities:
-        # Hledání entit typu 'DIS' (nebo podobného pro diagnózy)
-        # Předpokládáme, že 'DIS' je typ pro diagnózu/onemocnění v cs_cnec modelu
-        # Další možné typy by mohly být 'DIAG', 'PROBLEM', atd. Nutno ověřit s výstupem modelu.
-        dis_entities = [ent for ent in nlp_entities if ent.get('type') == 'DIS'] # TODO: Ověřit typ entity pro diagnózy
+    # Klíčová slova pro diagnózu/závěr
+    diagnosis_keywords = [
+        r"Diagnóza\s*:", r"Dg\.\s*:", r"Závěr\s*:", r"Zaver\s*:"
+    ]
+    # Typy NLP entit pro diagnózy (ověřit dle používaného NLP modelu)
+    diagnosis_entity_type = 'DIS'
+    # Okno pro hledání DIS entit za klíčovým slovem
+    diag_keyword_proximity_window = 150 # Zvětšené okno, diagnózy mohou být delší
+    # Max mezera mezi DIS entitami pro jejich spojení
+    max_gap_between_dis_entities = 20 # Počet znaků (včetně mezer, čárek atd.)
 
-        if dis_entities:
-            # Výběr nejlepší entity - např. první nebo nejdelší
-            # Prozatím vezmeme první nalezenou
-            selected_entity = dis_entities[0] # Jednoduchý výběr první entity
-            # Alternativa: výběr nejdelší entity
-            # selected_entity = max(dis_entities, key=lambda ent: len(ent['text']))
+    if nlp_entities and text:
+        print(f"DEBUG [FHIR Mapper]: parse_condition_data: Pokus o NLP extrakci diagnózy. Počet NLP entit: {len(nlp_entities)}")
+        all_dis_entities_near_keywords = []
 
-            diagnosis_text_raw_nlp = selected_entity['text'].strip()
-            condition_data["diagnosis_text"] = re.sub(r'[\.,;]$', '', diagnosis_text_raw_nlp).strip()
-            condition_data["onset_date_time_fhir"] = datetime.now().isoformat() # Předpokládaný čas
-            found_diagnosis_by_nlp = True
-            print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza (NLP typ DIS): '{condition_data['diagnosis_text']}' (Raw NLP: '{diagnosis_text_raw_nlp}')")
+        for kw_pattern in diagnosis_keywords:
+            for kw_match in re.finditer(kw_pattern, text, re.IGNORECASE):
+                kw_end_pos = kw_match.end()
+                # Hledáme DIS entity v definovaném okně za tímto klíčovým slovem
+                for entity in nlp_entities:
+                    if entity.get('type') == diagnosis_entity_type and \
+                       entity['start_char'] >= kw_end_pos and \
+                       entity['start_char'] < kw_end_pos + diag_keyword_proximity_window:
+                        # Přidáme entitu i pozici klíčového slova pro případné pozdější upřesnění
+                        if entity not in all_dis_entities_near_keywords: # Abychom neměli duplicity
+                             all_dis_entities_near_keywords.append(entity)
 
-    # Fallback na Regex, pokud NLP nenašlo diagnózu nebo nebyly poskytnuty NLP entity
+        if all_dis_entities_near_keywords:
+            all_dis_entities_near_keywords.sort(key=lambda x: x['start_char'])
+            print(f"DEBUG [FHIR Mapper]: Nalezeno {len(all_dis_entities_near_keywords)} DIS entit v blízkosti klíčových slov: {[e['text'] for e in all_dis_entities_near_keywords]}")
+
+            # Spojování těsně navazujících DIS entit
+            if len(all_dis_entities_near_keywords) > 1:
+                merged_dis_text_parts = []
+                current_merged_entity = all_dis_entities_near_keywords[0].copy() # Začneme s první
+
+                for i in range(1, len(all_dis_entities_near_keywords)):
+                    next_entity = all_dis_entities_near_keywords[i]
+                    # Kontrola, zda `next_entity` těsně navazuje na `current_merged_entity`
+                    gap = next_entity['start_char'] - current_merged_entity['end_char']
+                    intervening_text = text[current_merged_entity['end_char']:next_entity['start_char']]
+
+                    # Podmínky pro spojení: malá mezera a intervenující text neobsahuje signály nového odstavce/věty
+                    # Regex pro kontrolu, zda intervenující text obsahuje jen povolené znaky pro spojení
+                    # (mezery, čárky, středníky, spojky "a", "i")
+                    allowed_intervening_chars_pattern = r"^[,\sAaiI]*$"
+
+                    if gap >= 0 and gap <= max_gap_between_dis_entities and \
+                       re.fullmatch(allowed_intervening_chars_pattern, intervening_text):
+                        print(f"DEBUG [FHIR Mapper]: Spojuji DIS entitu '{current_merged_entity['text']}' s '{next_entity['text']}' (mezera: {gap}, text mezi: '{intervening_text}').")
+                        # Rozšíříme text a end_char aktuální spojené entity
+                        current_merged_entity['text'] += intervening_text + next_entity['text']
+                        current_merged_entity['end_char'] = next_entity['end_char']
+                    else:
+                        # Entita nenavazuje, uložíme dosud spojenou a začneme novou
+                        merged_dis_text_parts.append(current_merged_entity)
+                        current_merged_entity = next_entity.copy()
+                        print(f"DEBUG [FHIR Mapper]: DIS entita '{next_entity['text']}' nenavazuje na předchozí. Začínám nový blok.")
+
+                merged_dis_text_parts.append(current_merged_entity) # Přidáme poslední (nebo jedinou) spojenou entitu
+
+                # Prozatím vezmeme text z prvního bloku spojených entit
+                # TODO: Zvážit, zda nevytvářet více Condition, pokud je více nesouvislých bloků DIS
+                if merged_dis_text_parts:
+                    final_dis_entity_data = merged_dis_text_parts[0] # Bereme první blok
+                    diagnosis_text_raw_nlp = final_dis_entity_data['text']
+                    original_end_char = final_dis_entity_data['end_char']
+                    print(f"DEBUG [FHIR Mapper]: Surový text spojených DIS entit (první blok): '{diagnosis_text_raw_nlp}', původní end_char: {original_end_char}")
+
+                    # Experimentální rozšíření konce diagnózy
+                    # Zkusíme rozšířit o pár znaků, pokud to vypadá, že konec chybí
+                    # Např. pokud končí písmenem a za ním je tečka/čárka v originálním textu
+                    # Toto je velmi opatrný pokus.
+                    extended_text = diagnosis_text_raw_nlp
+                    potential_end_char = original_end_char
+                    # Rozšíříme maximálně o 5 znaků, jeden po druhém
+                    for i in range(5):
+                        if potential_end_char + i < len(text):
+                            char_to_add = text[potential_end_char + i]
+                            # Podmínka: přidáváme jen interpunkci nebo pokračování slova
+                            # Nepřidáváme, pokud je to nová věta (velké písmeno po mezeře) nebo výrazná mezera
+                            if char_to_add.isspace() and i > 0: # Pokud už jsme něco přidali a teď je mezera, zvážit konec
+                                 # Pokud za mezerou následuje velké písmeno, pravděpodobně nová myšlenka
+                                if potential_end_char + i + 1 < len(text) and text[potential_end_char + i + 1].isupper():
+                                    break
+                            if char_to_add.isalnum() or char_to_add in ['.', ',', ';', ')']: # Povolene znaky pro rozšíření
+                                extended_text += char_to_add
+                            else: # Narazili jsme na znak, který nechceme (např. nový řádek, speciální znak)
+                                break
+                        else: # Jsme na konci textu
+                            break
+
+                    if extended_text != diagnosis_text_raw_nlp:
+                        print(f"DEBUG [FHIR Mapper]: Experimentální rozšíření textu diagnózy na: '{extended_text}'")
+                        diagnosis_text_raw_nlp = extended_text
+
+                    condition_data["diagnosis_text"] = re.sub(r'[\.,;\s]$', '', diagnosis_text_raw_nlp).strip() # Finální čištění
+                    condition_data["onset_date_time_fhir"] = datetime.now().isoformat()
+                    found_diagnosis_by_nlp = True
+                    print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza (NLP, spojené/rozšířené DIS): '{condition_data['diagnosis_text']}' (Raw NLP: '{diagnosis_text_raw_nlp}')")
+
+            elif all_dis_entities_near_keywords: # Jen jedna DIS entita nalezena
+                selected_entity = all_dis_entities_near_keywords[0]
+                diagnosis_text_raw_nlp = selected_entity['text'].strip()
+                # Zde by se také mohlo aplikovat experimentální rozšíření, pokud je relevantní.
+                # Pro zjednodušení to nyní vynecháme pro jednotlivé entity, ale je to možnost.
+                condition_data["diagnosis_text"] = re.sub(r'[\.,;]$', '', diagnosis_text_raw_nlp).strip()
+                condition_data["onset_date_time_fhir"] = datetime.now().isoformat()
+                found_diagnosis_by_nlp = True
+                print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza (NLP, jedna DIS entita): '{condition_data['diagnosis_text']}' (Raw NLP: '{diagnosis_text_raw_nlp}')")
+
+    # Fallback na Regex, pokud NLP nenašlo diagnózu nebo nebyly NLP entity/text
     if not found_diagnosis_by_nlp and text:
         # re.DOTALL umožňuje tečce (.) zachytit i znaky nového řádku, což je pro víceřádkové diagnózy důležité.
         diagnosis_match = re.search(REGEX_DIAGNOSIS_TEXT, text, re.IGNORECASE | re.DOTALL)
@@ -628,45 +1078,266 @@ def parse_vital_signs_data(nlp_entities: Optional[List[Dict[str, Any]]], text: s
         - "weight_value": Hodnota hmotnosti (desetinná čárka normalizována na tečku).
         - "weight_unit": Jednotka hmotnosti (standardizováno na "kg").
     """
-    vital_signs_data = {} # Inicializace prázdného slovníku
+    vital_signs_data = {}
+    # Společné parametry pro NLP vyhledávání
+    vital_sign_target_entity_types = ['CARDINAL', 'NUMBER'] # Typy entit pro číselné hodnoty
+    vital_sign_nlp_window_size = 25 # Okno v znacích za klíčovým slovem
+    surrounding_text_window = 15 # Okno za entitou pro hledání jednotky
 
-    # Extrakce pulzu
-    pulse_match = re.search(REGEX_PULSE, text, re.IGNORECASE)
-    if pulse_match:
-        vital_signs_data["pulse_value"] = pulse_match.group(1).strip()
-        vital_signs_data["pulse_unit"] = "/min" # Standardizovaná jednotka pro FHIR
-        print(f"DEBUG [FHIR Mapper]: Nalezen pulz: {vital_signs_data['pulse_value']} {vital_signs_data['pulse_unit']}")
+    # --- Pulz (Srdeční frekvence) ---
+    found_pulse_by_nlp = False
+    pulse_keywords = [r"\bPulz\b", r"\bPuls\b", r"\bSF\b", r"Srdeční frekvence", r"Srdecni frekvence"]
+    pulse_unit_regex_map = {
+        "/min": r"/min|tepů/min|tepu/min|bpm" # standardní jednotka: regex pro její varianty
+    }
+    if nlp_entities and text:
+        print(f"DEBUG [FHIR Mapper]: parse_vital_signs_data: Pokus o NLP extrakci pro Pulz.")
+        for keyword_pattern in pulse_keywords:
+            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
+                search_start_offset = keyword_match.end()
+                search_end_offset = search_start_offset + vital_sign_nlp_window_size
 
-    # Extrakce teploty
-    temp_match = re.search(REGEX_TEMPERATURE, text, re.IGNORECASE)
-    if temp_match:
-        temperature_value_raw = temp_match.group(1).strip()
-        # Normalizace desetinného oddělovače (čárka -> tečka) pro konzistentní zpracování float()
-        vital_signs_data["temperature_value"] = temperature_value_raw.replace(",", ".")
-        vital_signs_data["temperature_unit"] = "°C" # Standardizovaná jednotka pro FHIR
-        print(f"DEBUG [FHIR Mapper]: Nalezena teplota: {vital_signs_data['temperature_value']} {vital_signs_data['temperature_unit']} (Raw: '{temperature_value_raw}')")
+                candidate_entities = []
+                for entity in nlp_entities:
+                    if entity.get('type') in vital_sign_target_entity_types and \
+                       entity['start_char'] >= search_start_offset and \
+                       entity['end_char'] <= search_end_offset:
+                        candidate_entities.append(entity)
+                candidate_entities.sort(key=lambda x: x['start_char'])
 
-    # Extrakce výšky
-    height_match = re.search(REGEX_HEIGHT, text, re.IGNORECASE)
-    if height_match:
-        height_value_raw = height_match.group(1).strip()
-        vital_signs_data["height_value"] = height_value_raw.replace(",", ".")
-        # Pokud je jednotka explicitně uvedena a je "cm", použijeme ji, jinak default "cm".
-        # group(2) může být None, pokud jednotka není v textu.
-        vital_signs_data["height_unit"] = height_match.group(2) if height_match.group(2) and height_match.group(2).lower() == "cm" else "cm"
-        print(f"DEBUG [FHIR Mapper]: Nalezena výška: {vital_signs_data['height_value']} {vital_signs_data['height_unit']} (Raw: '{height_value_raw}')")
+                if candidate_entities:
+                    # Vezmeme první nalezenou číselnou entitu
+                    value_entity = candidate_entities[0]
+                    entity_text_content = value_entity['text']
+                    # Okolí za entitou pro hledání jednotky
+                    # text[value_entity['end_char'] : value_entity['end_char'] + surrounding_text_window]
+                    # zajistí, že bereme text z originálního dokumentu hned za entitou
+                    surrounding = text[value_entity['end_char']: value_entity['end_char'] + surrounding_text_window]
 
-    # Extrakce hmotnosti
-    weight_match = re.search(REGEX_WEIGHT, text, re.IGNORECASE)
-    if weight_match:
-        weight_value_raw = weight_match.group(1).strip()
-        vital_signs_data["weight_value"] = weight_value_raw.replace(",", ".")
-        # Pokud je jednotka explicitně uvedena a je "kg", použijeme ji, jinak default "kg".
-        # group(2) může být None.
-        vital_signs_data["weight_unit"] = weight_match.group(2) if weight_match.group(2) and weight_match.group(2).lower() == "kg" else "kg"
-        print(f"DEBUG [FHIR Mapper]: Nalezena hmotnost: {vital_signs_data['weight_value']} {vital_signs_data['weight_unit']} (Raw: '{weight_value_raw}')")
+                    value, unit = extract_value_and_unit_from_nlp_entity_text(
+                        entity_text_content, surrounding, pulse_unit_regex_map, default_unit="/min"
+                    )
+                    if value and unit: # Potřebujeme hodnotu i jednotku
+                        vital_signs_data["pulse_value"] = value
+                        vital_signs_data["pulse_unit"] = unit
+                        found_pulse_by_nlp = True
+                        print(f"DEBUG [FHIR Mapper]: Nalezen Pulz (NLP) pomocí '{keyword_match.group(0)}': {value} {unit}")
+                        break
+                    elif value_entity: # NLP našlo číslo, ale extrakce selhala (např. chybí jednotka)
+                        print(f"DEBUG [FHIR Mapper]: Pulz: NLP našlo entitu '{value_entity['text']}', ale extrakce hodnoty/jednotky selhala. Zkouším kontextový Regex.")
+                        context_offset_before = 10
+                        context_offset_after = 20 # Větší za, pro jednotku
+                        segment_start = max(0, value_entity['start_char'] - context_offset_before)
+                        segment_end = min(len(text), value_entity['end_char'] + context_offset_after)
+                        contextual_text_segment = text[segment_start:segment_end]
 
-    # print(f"DEBUG [FHIR Mapper]: Parsed vital signs data: {vital_signs_data}")
+                        pulse_match_context = re.search(REGEX_PULSE, contextual_text_segment, re.IGNORECASE)
+                        if pulse_match_context:
+                            vital_signs_data["pulse_value"] = pulse_match_context.group(1).strip()
+                            vital_signs_data["pulse_unit"] = "/min"
+                            found_pulse_by_nlp = True # Označíme jako nalezené NLP cestou (i když s pomocí kontext. regexu)
+                            print(f"DEBUG [FHIR Mapper]: Nalezen Pulz (Kontextový Regex fallback) v segmentu '{contextual_text_segment}': {vital_signs_data['pulse_value']} {vital_signs_data['pulse_unit']}")
+                            break
+            if found_pulse_by_nlp:
+                break
+
+    if not found_pulse_by_nlp and text:
+        print(f"DEBUG [FHIR Mapper]: Pulz: NLP ani kontextový Regex nebyly úspěšné. Provádím globální Regex fallback.")
+        pulse_match_regex = re.search(REGEX_PULSE, text, re.IGNORECASE)
+        if pulse_match_regex:
+            vital_signs_data["pulse_value"] = pulse_match_regex.group(1).strip()
+            vital_signs_data["pulse_unit"] = "/min"
+            print(f"DEBUG [FHIR Mapper]: Nalezen Pulz (Globální Regex fallback): {vital_signs_data['pulse_value']} {vital_signs_data['pulse_unit']}")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Pulz nenalezen ani pomocí NLP, ani pomocí Regex (kontextového i globálního).")
+
+    # --- Tělesná teplota ---
+    found_temp_by_nlp = False
+    temp_keywords = [r"\bTeplota\b", r"\bT\b"]
+    temp_unit_regex_map = {
+        "°C": r"°C|C|st\.C|stupňů Celsia" # stupnu Celsia
+    }
+    if nlp_entities and text:
+        print(f"DEBUG [FHIR Mapper]: parse_vital_signs_data: Pokus o NLP extrakci pro Teplotu.")
+        for keyword_pattern in temp_keywords:
+            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
+                search_start_offset = keyword_match.end()
+                search_end_offset = search_start_offset + vital_sign_nlp_window_size
+                candidate_entities = []
+                for entity in nlp_entities:
+                    if entity.get('type') in vital_sign_target_entity_types and \
+                       entity['start_char'] >= search_start_offset and \
+                       entity['end_char'] <= search_end_offset:
+                        candidate_entities.append(entity)
+                candidate_entities.sort(key=lambda x: x['start_char'])
+
+                if candidate_entities:
+                    value_entity = candidate_entities[0]
+                    entity_text_content = value_entity['text']
+                    surrounding = text[value_entity['end_char']: value_entity['end_char'] + surrounding_text_window]
+                    value, unit = extract_value_and_unit_from_nlp_entity_text(
+                        entity_text_content, surrounding, temp_unit_regex_map, default_unit="°C"
+                    )
+                    if value and unit:
+                        vital_signs_data["temperature_value"] = value
+                        vital_signs_data["temperature_unit"] = unit
+                        found_temp_by_nlp = True
+                        print(f"DEBUG [FHIR Mapper]: Nalezena Teplota (NLP) pomocí '{keyword_match.group(0)}': {value} {unit}")
+                        break
+                    elif value_entity:
+                        print(f"DEBUG [FHIR Mapper]: Teplota: NLP našlo entitu '{value_entity['text']}', ale extrakce hodnoty/jednotky selhala. Zkouším kontextový Regex.")
+                        context_offset_before = 10
+                        context_offset_after = 20
+                        segment_start = max(0, value_entity['start_char'] - context_offset_before)
+                        segment_end = min(len(text), value_entity['end_char'] + context_offset_after)
+                        contextual_text_segment = text[segment_start:segment_end]
+
+                        temp_match_context = re.search(REGEX_TEMPERATURE, contextual_text_segment, re.IGNORECASE)
+                        if temp_match_context:
+                            temp_val_raw = temp_match_context.group(1).strip()
+                            vital_signs_data["temperature_value"] = temp_val_raw.replace(",", ".")
+                            vital_signs_data["temperature_unit"] = "°C"
+                            found_temp_by_nlp = True
+                            print(f"DEBUG [FHIR Mapper]: Nalezena Teplota (Kontextový Regex fallback) v segmentu '{contextual_text_segment}': {vital_signs_data['temperature_value']} {vital_signs_data['temperature_unit']}")
+                            break
+            if found_temp_by_nlp:
+                break
+
+    if not found_temp_by_nlp and text:
+        print(f"DEBUG [FHIR Mapper]: Teplota: NLP ani kontextový Regex nebyly úspěšné. Provádím globální Regex fallback.")
+        temp_match_regex = re.search(REGEX_TEMPERATURE, text, re.IGNORECASE)
+        if temp_match_regex:
+            temperature_value_raw = temp_match_regex.group(1).strip()
+            vital_signs_data["temperature_value"] = temperature_value_raw.replace(",", ".")
+            vital_signs_data["temperature_unit"] = "°C"
+            print(f"DEBUG [FHIR Mapper]: Nalezena Teplota (Globální Regex fallback): {vital_signs_data['temperature_value']} {vital_signs_data['temperature_unit']} (Raw: '{temperature_value_raw}')")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Teplota nenalezena ani pomocí NLP, ani pomocí Regex (kontextového i globálního).")
+
+    # --- Tělesná výška ---
+    found_height_by_nlp = False
+    height_keywords = [r"\bVýška\b", r"\bVýš\.", r"Vyska"]
+    height_unit_regex_map = {"cm": r"cm|centimetrů"}
+    if nlp_entities and text:
+        print(f"DEBUG [FHIR Mapper]: parse_vital_signs_data: Pokus o NLP extrakci pro Výšku.")
+        for keyword_pattern in height_keywords:
+            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
+                search_start_offset = keyword_match.end()
+                search_end_offset = search_start_offset + vital_sign_nlp_window_size
+                candidate_entities = []
+                for entity in nlp_entities:
+                    if entity.get('type') in vital_sign_target_entity_types and \
+                       entity['start_char'] >= search_start_offset and \
+                       entity['end_char'] <= search_end_offset:
+                        candidate_entities.append(entity)
+                candidate_entities.sort(key=lambda x: x['start_char'])
+
+                if candidate_entities:
+                    value_entity = candidate_entities[0]
+                    entity_text_content = value_entity['text']
+                    surrounding = text[value_entity['end_char']: value_entity['end_char'] + surrounding_text_window]
+                    value, unit = extract_value_and_unit_from_nlp_entity_text(
+                        entity_text_content, surrounding, height_unit_regex_map, default_unit="cm"
+                    )
+                    if value and unit:
+                        vital_signs_data["height_value"] = value
+                        vital_signs_data["height_unit"] = unit
+                        found_height_by_nlp = True
+                        print(f"DEBUG [FHIR Mapper]: Nalezena Výška (NLP) pomocí '{keyword_match.group(0)}': {value} {unit}")
+                        break
+                    elif value_entity:
+                        print(f"DEBUG [FHIR Mapper]: Výška: NLP našlo entitu '{value_entity['text']}', ale extrakce hodnoty/jednotky selhala. Zkouším kontextový Regex.")
+                        context_offset_before = 10
+                        context_offset_after = 20
+                        segment_start = max(0, value_entity['start_char'] - context_offset_before)
+                        segment_end = min(len(text), value_entity['end_char'] + context_offset_after)
+                        contextual_text_segment = text[segment_start:segment_end]
+
+                        height_match_context = re.search(REGEX_HEIGHT, contextual_text_segment, re.IGNORECASE)
+                        if height_match_context:
+                            height_val_raw = height_match_context.group(1).strip()
+                            vital_signs_data["height_value"] = height_val_raw.replace(",", ".")
+                            vital_signs_data["height_unit"] = height_match_context.group(2) if height_match_context.group(2) and height_match_context.group(2).lower() == "cm" else "cm"
+                            found_height_by_nlp = True
+                            print(f"DEBUG [FHIR Mapper]: Nalezena Výška (Kontextový Regex fallback) v segmentu '{contextual_text_segment}': {vital_signs_data['height_value']} {vital_signs_data['height_unit']}")
+                            break
+            if found_height_by_nlp:
+                break
+
+    if not found_height_by_nlp and text:
+        print(f"DEBUG [FHIR Mapper]: Výška: NLP ani kontextový Regex nebyly úspěšné. Provádím globální Regex fallback.")
+        height_match_regex = re.search(REGEX_HEIGHT, text, re.IGNORECASE)
+        if height_match_regex:
+            height_value_raw = height_match_regex.group(1).strip()
+            vital_signs_data["height_value"] = height_value_raw.replace(",", ".")
+            vital_signs_data["height_unit"] = height_match_regex.group(2) if height_match_regex.group(2) and height_match_regex.group(2).lower() == "cm" else "cm"
+            print(f"DEBUG [FHIR Mapper]: Nalezena Výška (Globální Regex fallback): {vital_signs_data['height_value']} {vital_signs_data['height_unit']} (Raw: '{height_value_raw}')")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Výška nenalezena ani pomocí NLP, ani pomocí Regex (kontextového i globálního).")
+
+    # --- Tělesná hmotnost ---
+    found_weight_by_nlp = False
+    weight_keywords = [r"\bHmotnost\b", r"\bHm\.", r"\bVáha\b", r"Vaha"]
+    weight_unit_regex_map = {"kg": r"kg|kilogramů"}
+    if nlp_entities and text:
+        print(f"DEBUG [FHIR Mapper]: parse_vital_signs_data: Pokus o NLP extrakci pro Hmotnost.")
+        for keyword_pattern in weight_keywords:
+            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
+                search_start_offset = keyword_match.end()
+                search_end_offset = search_start_offset + vital_sign_nlp_window_size
+                candidate_entities = []
+                for entity in nlp_entities:
+                    if entity.get('type') in vital_sign_target_entity_types and \
+                       entity['start_char'] >= search_start_offset and \
+                       entity['end_char'] <= search_end_offset:
+                        candidate_entities.append(entity)
+                candidate_entities.sort(key=lambda x: x['start_char'])
+
+                if candidate_entities:
+                    value_entity = candidate_entities[0]
+                    entity_text_content = value_entity['text']
+                    surrounding = text[value_entity['end_char']: value_entity['end_char'] + surrounding_text_window]
+                    value, unit = extract_value_and_unit_from_nlp_entity_text(
+                        entity_text_content, surrounding, weight_unit_regex_map, default_unit="kg"
+                    )
+                    if value and unit:
+                        vital_signs_data["weight_value"] = value
+                        vital_signs_data["weight_unit"] = unit
+                        found_weight_by_nlp = True
+                        print(f"DEBUG [FHIR Mapper]: Nalezena Hmotnost (NLP) pomocí '{keyword_match.group(0)}': {value} {unit}")
+                        break
+                    elif value_entity:
+                        print(f"DEBUG [FHIR Mapper]: Hmotnost: NLP našlo entitu '{value_entity['text']}', ale extrakce hodnoty/jednotky selhala. Zkouším kontextový Regex.")
+                        context_offset_before = 10
+                        context_offset_after = 20
+                        segment_start = max(0, value_entity['start_char'] - context_offset_before)
+                        segment_end = min(len(text), value_entity['end_char'] + context_offset_after)
+                        contextual_text_segment = text[segment_start:segment_end]
+
+                        weight_match_context = re.search(REGEX_WEIGHT, contextual_text_segment, re.IGNORECASE)
+                        if weight_match_context:
+                            weight_val_raw = weight_match_context.group(1).strip()
+                            vital_signs_data["weight_value"] = weight_val_raw.replace(",", ".")
+                            vital_signs_data["weight_unit"] = weight_match_context.group(2) if weight_match_context.group(2) and weight_match_context.group(2).lower() == "kg" else "kg"
+                            found_weight_by_nlp = True
+                            print(f"DEBUG [FHIR Mapper]: Nalezena Hmotnost (Kontextový Regex fallback) v segmentu '{contextual_text_segment}': {vital_signs_data['weight_value']} {vital_signs_data['weight_unit']}")
+                            break
+            if found_weight_by_nlp:
+                break
+
+    if not found_weight_by_nlp and text:
+        print(f"DEBUG [FHIR Mapper]: Hmotnost: NLP ani kontextový Regex nebyly úspěšné. Provádím globální Regex fallback.")
+        weight_match_regex = re.search(REGEX_WEIGHT, text, re.IGNORECASE)
+        if weight_match_regex:
+            weight_value_raw = weight_match_regex.group(1).strip()
+            vital_signs_data["weight_value"] = weight_value_raw.replace(",", ".")
+            vital_signs_data["weight_unit"] = weight_match_regex.group(2) if weight_match_regex.group(2) and weight_match_regex.group(2).lower() == "kg" else "kg"
+            print(f"DEBUG [FHIR Mapper]: Nalezena Hmotnost (Globální Regex fallback): {vital_signs_data['weight_value']} {vital_signs_data['weight_unit']} (Raw: '{weight_value_raw}')")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Hmotnost nenalezena ani pomocí NLP, ani pomocí Regex (kontextového i globálního).")
+
+    if not text and not nlp_entities: # Přesunuto na konec funkce pro obecnou zprávu
+        print(f"DEBUG [FHIR Mapper]: parse_vital_signs_data: Nelze hledat vitální funkce - chybí text i NLP entity.")
     return vital_signs_data
 
 # --- Funkce pro vytváření jednotlivých FHIR zdrojů ---
