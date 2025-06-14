@@ -7,6 +7,7 @@ import './App.css';
  * Umožňuje nahrání textového nebo obrázkového souboru,
  * odeslání na backend pro zpracování (včetně OCR pro obrázky)
  * a zobrazení výsledných FHIR dat, včetně nově přidaných diagnóz (Condition).
+ * Nově také umožňuje navrhovat korekce pro problémy s kvalitou dat.
  */
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -15,6 +16,9 @@ function App() {
   const [fhirOutput, setFhirOutput] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [qualityIssues, setQualityIssues] = useState([]);
+  const [editingIssueIndex, setEditingIssueIndex] = useState(null);
+  const [correctionSuggestion, setCorrectionSuggestion] = useState('');
+  const [correctionStatus, setCorrectionStatus] = useState('');
 
 
   const handleFileChange = async (event) => {
@@ -22,8 +26,12 @@ function App() {
     setError('');
     setExtractedTextFromBackend('');
     setFhirOutput(null);
-    setQualityIssues([]); // Reset quality issues
+    setQualityIssues([]);
     setSelectedFile(null);
+    // Reset correction-related states
+    setEditingIssueIndex(null);
+    setCorrectionSuggestion('');
+    setCorrectionStatus('');
 
     if (!file) {
       return;
@@ -112,7 +120,7 @@ ${content.substring(0,100)}...`);
       console.error("Chyba při odesílání souboru nebo zpracování odpovědi z backendu:", err);
       setError(`Chyba při zpracování souboru: ${err.message}`);
       setFhirOutput(null);
-      setQualityIssues([]); // Reset quality issues on error
+      setQualityIssues([]);
     } finally {
       setIsLoading(false);
       if (event && event.target) {
@@ -120,6 +128,72 @@ ${content.substring(0,100)}...`);
       }
     }
   };
+
+  const handleStartCorrection = (index) => {
+    setEditingIssueIndex(index);
+    setCorrectionSuggestion(String(qualityIssues[index].value !== undefined ? qualityIssues[index].value : ''));
+    setCorrectionStatus(''); // Clear previous status messages
+  };
+
+  const handleCancelCorrection = () => {
+    setEditingIssueIndex(null);
+    setCorrectionSuggestion('');
+    // Optionally clear correctionStatus here if desired, or manage its lifecycle elsewhere
+    // setCorrectionStatus('');
+  };
+
+  const handleSuggestionChange = (event) => {
+    setCorrectionSuggestion(event.target.value);
+  };
+
+  const handleSubmitCorrection = async (index) => {
+    const originalIssue = qualityIssues[index];
+    const payload = {
+      originalIssue: {
+        level: originalIssue.level,
+        message: originalIssue.message,
+        field: originalIssue.field,
+        value: originalIssue.value !== undefined ? String(originalIssue.value) : null
+      },
+      suggestedValue: correctionSuggestion,
+      fileName: selectedFile ? selectedFile.name : 'N/A'
+    };
+
+    setIsLoading(true);
+    setCorrectionStatus(''); // Clear previous status
+
+    try {
+      const response = await fetch('http://localhost:8000/api/suggest_correction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        setCorrectionStatus("Návrh úspěšně odeslán.");
+      } else {
+        let errorMsg = `Chyba serveru: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData && errorData.detail) {
+            errorMsg = `Chyba při odesílání návrhu: ${errorData.detail}`;
+          }
+        } catch (e) {
+          // Keep the generic server error if JSON parsing fails
+        }
+        setCorrectionStatus(errorMsg);
+      }
+    } catch (networkError) {
+      console.error("Network error submitting correction:", networkError);
+      setCorrectionStatus("Chyba sítě při odesílání návrhu.");
+    } finally {
+      setIsLoading(false);
+      handleCancelCorrection(); // Close editing UI
+    }
+  };
+
 
   // Helper funkce pro formátování data a času
   const formatFhirDateTime = (dateTimeString) => {
@@ -348,13 +422,56 @@ ${content.substring(0,100)}...`);
         {!isLoading && selectedFile && qualityIssues !== undefined && (
           <section className="quality-issues-section">
             <h3>Problémy s kvalitou dat</h3>
+            {correctionStatus && (
+              <p
+                className="correction-status-message"
+                style={{ color: correctionStatus.startsWith('Chyba') ? 'red' : 'green', fontWeight: 'bold', marginBottom: '15px' }}
+              >
+                {correctionStatus}
+              </p>
+            )}
             {qualityIssues.length > 0 ? (
               qualityIssues.map((issue, index) => (
                 <div key={index} className={`quality-issue quality-issue-${issue.level?.toLowerCase() || 'info'}`}>
                   <p><strong>Úroveň:</strong> {issue.level || 'N/A'}</p>
                   <p><strong>Zpráva:</strong> {issue.message || 'N/A'}</p>
                   {issue.field && <p><strong>Pole:</strong> {issue.field}</p>}
-                  {issue.value && <p><strong>Hodnota:</strong> {String(issue.value)}</p>}
+                  {issue.value !== undefined && <p><strong>Hodnota:</strong> {String(issue.value)}</p>}
+
+                  {editingIssueIndex === index ? (
+                    <div className="correction-form" style={{ marginTop: '10px', marginBottom: '10px', padding: '10px', border: '1px dashed #999', backgroundColor: '#f9f9f9' }}>
+                      <label htmlFor={`suggestion-${index}`} style={{ display: 'block', marginBottom: '5px' }}>Navrhovaná korekce pro "{issue.field || 'pole'}":</label>
+                      <input
+                        id={`suggestion-${index}`}
+                        type="text"
+                        value={correctionSuggestion}
+                        onChange={handleSuggestionChange}
+                        style={{ marginRight: '10px', padding: '5px', border: '1px solid #ccc', borderRadius: '4px', width: 'calc(100% - 220px)' }}
+                      />
+                      <button
+                        onClick={() => handleSubmitCorrection(index)}
+                        disabled={isLoading}
+                        style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        {isLoading ? 'Odesílání...' : 'Odeslat návrh'}
+                      </button>
+                      <button
+                        onClick={handleCancelCorrection}
+                        disabled={isLoading}
+                        style={{ padding: '5px 10px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        Zrušit
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleStartCorrection(index)}
+                      disabled={isLoading || editingIssueIndex !== null} // Disable if another issue is being edited
+                      style={{ marginTop: '10px', padding: '5px 10px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                      Navrhnout korekci
+                    </button>
+                  )}
                 </div>
               ))
             ) : (
