@@ -18,7 +18,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 - **Uživatelsky přívětivé rozhraní**: Intuitivní prostředí pro nahrávání dokumentů a kontrolu výsledků.
 
 ### Klíčové funkce
-1. **Podpora více formátů**: Zpracování textových dokumentů, PDF a naskenovaných obrázků.
+1. **Podpora více formátů**: Zpracování textových dokumentů (.txt) a naskenovaných obrázků (formáty .png, .jpg, .jpeg). Podpora PDF je plánována do budoucna.
 2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu: primárně využívá model Stanza (`cs_cnec`) pro rozpoznávání pojmenovaných entit (NER) jako jsou jména pacientů, data, diagnózy (např. typ 'DIS'). Pro specifické strukturované údaje (např. některé vitální funkce) a jako fallback jsou použity pokročilé regulární výrazy.
 3. **FHIR mapování**: Automatická konverze dat do FHIR zdrojů.
 4. **Pokročilá validace dat**: Integrované kontroly pro zajištění konzistence a správnosti dat, včetně porovnání údajů z rodného čísla s datem narození, kontroly fyziologických rozsahů pro měřené hodnoty a ověření časové platnosti záznamů.
@@ -26,8 +26,8 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 6. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
 
 ### Technologický stack
-- **Frontend**: React.js s použitím shadcn/ui
-- **AI modely**: GPT-4.0, vlastní NLP modely
+- **Frontend**: React.js
+- **AI modely**: Pro rozpoznávání pojmenovaných entit (NER) je využíván model cs_cnec z knihovny Stanza. Aplikace dále využívá kombinaci pravidel a regulárních výrazů.
 - **NER model**: Stanza (knihovna od Stanford NLP Group, model `cs_cnec` pro češtinu)
 - **OCR**: Tesseract
 - **Backend**: DigiMedic FHIR Backend API
@@ -79,11 +79,11 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
 - [x] **Integrace NLP modelu pro extrakci entit:**
     - [x] Výběr a testování předtrénovaného NLP modelu (vybrán `stanfordnlp/stanza-cs` s modelem `cs_cnec`, licence Apache 2.0).
-    - [x] Návrh hybridního přístupu (kombinace NLP Stanza a regexů) a jeho implementace pro klíčové entity (jméno pacienta, datum narození, diagnózy). Základní NLP podpora pro číselné hodnoty vitálních funkcí s robustním regex fallbackem.
+    - [~] Návrh hybridního přístupu (kombinace NLP Stanza a regexů) a jeho implementace pro klíčové entity (jméno pacienta, datum narození, diagnózy). (Implementace NLP pro extrakci některých klíčových entit jako jméno a diagnóza je provedena. NLP podpora pro číselné hodnoty vitálních funkcí je zatím základní a spoléhá se více na regex; další vylepšení jsou plánována).
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
 - [x] **Pokročilá validace a návrh korekce dat:**
     - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
-    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen).
+    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích).
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
     - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů.
@@ -112,29 +112,36 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
    ```
 2. Nainstalujte závislosti:
    ```
-   cd ai-fhir-komponenta
+   cd frontend
    npm install
+   cd ..
    ```
 3. Nastavte proměnné prostředí:
-   ```
-   cp .env.example .env
-   # Upravte .env s vašimi specifickými konfiguracemi, včetně přístupových údajů k DigiMedic API
-   ```
+   `Proměnné prostředí se nastavují následovně:`
+   *   `Pro backend (FastAPI/Uvicorn): Pokud existuje soubor \`.env.example\` v kořenovém adresáři nebo v \`backend/\`, zkopírujte jej jako \`.env\` a upravte podle potřeby (např. pro nastavení Uvicorn serveru). Backend aktuálně nenačítá \`.env\` soubor přímo pro svou aplikační logiku (např. API klíče), ale konfigurace DigiMedic API klienta je prozatím simulovaná.`
+   *   `Pro frontend (React): Pro nastavení specifických proměnných pro frontend, jako je URL adresa backendového API, vytvořte soubor \`frontend/.env\`. Do tohoto souboru můžete přidat proměnné s prefixem \`REACT_APP_\`, například: \`REACT_APP_API_URL=http://localhost:8000/api\`. Tyto proměnné pak budou dostupné v kódu frontendu přes \`process.env.REACT_APP_...\`.`
 4. Spusťte vývojový server:
-   ```
-   npm run dev
-   ```
+   `Spuštění vývojových serverů:`
+   *   `Pro backend (z kořenového adresáře projektu): uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
+   *   `Pro frontend (z adresáře \`frontend\`): npm start`
 
 ### Spuštění testů
 ```
-npm run test
+# Spuštění backendových testů (z kořenového adresáře projektu):
+pip install pytest # Pokud ještě není nainstalován
+pytest backend/tests
+
+# Spuštění frontendových testů (z adresáře `frontend`):
+npm test
+# Poznámka: Aktuální konfigurace frontendových testů v package.json pouze vypisuje zprávu
+# a neobsahuje reálné testy. Pro plnohodnotné testování frontendu je potřeba testy implementovat.
 ```
 
 ## Přispívání
-Vítáme příspěvky do vývoje AI-FHIR komponenty. Přečtěte si prosím náš soubor [CONTRIBUTING.md](CONTRIBUTING.md) pro podrobnosti o procesu pro podávání pull requestů.
+Vítáme příspěvky do vývoje AI-FHIR komponenty.
 
 ## Licence
-Tento projekt je licencován pod MIT licencí - viz soubor [LICENSE.md](LICENSE.md) pro detaily.
+Tento projekt je licencován pod MIT licencí.
 
 ## Kontakt
 Pro technické dotazy ohledně komponenty kontaktujte:
