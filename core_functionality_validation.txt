@@ -1,0 +1,139 @@
+## Validace implementace klíčových funkcionalit
+
+Toto zhodnocení se zaměřuje na implementaci hlavních funkcionalit v souborech `fhir_mapper.py`, `ai_models/text_extractor.py`, `digimedic_api_client.py` a `main.py`.
+
+### 1. FHIR Mapování (`fhir_mapper.py`)
+
+*   **Mapování extrahovaných dat na FHIR zdroje:**
+    *   Hlavní funkce `map_text_to_fhir` orchestruje celý proces. Nejprve volá parsovací funkce (např. `parse_patient_data`, `parse_observation_data`, `parse_vital_signs_data`, `parse_condition_data`) k získání strukturovaných dat z textu nebo NLP entit.
+    *   Výstup z těchto parsovacích funkcí (slovníky s klíči jako `full_name`, `birth_date_fhir`, `blood_pressure_value`, `diagnosis_text` atd.) je následně předán specifickým `create_fhir_*_resource` funkcím (např. `create_fhir_patient_resource`, `create_fhir_observation_bp_resource`, `create_fhir_condition_resource`).
+    *   Každá `create_fhir_*_resource` funkce je zodpovědná za transformaci těchto strukturovaných dat do validní JSON struktury FHIR zdroje daného typu (Patient, Observation, Condition). Zdroje obsahují povinné atributy, metadata (včetně odkazů na české FHIR profily jako `CzPatient`, `VitalSignsObservation`, `CzCondition`), unikátní ID generovaná pomocí `generate_fhir_id()` (UUID) a namapované hodnoty.
+    *   Pro `Observation` zdroje se používají LOINC kódy pro identifikaci typu pozorování (např. krevní tlak, pulz, teplota) a UCUM kódy pro jednotky.
+    *   FHIR Patient resource je klíčový; pokud jeho vytvoření selže, další navázané zdroje se negenerují, což je logické. Jeho ID se používá pro referenci v `subject` elementu ostatních zdrojů.
+
+*   **Implementovaná validační pravidla:**
+    *   **RČ vs. Datum narození:**
+        *   Funkce `is_valid_birth_number` kontroluje délku RČ, číselné znaky a pro 10místná RČ vydaná mezi lety 1954-2003 (pokud nejde o nový formát měsíců) i dělitelnost 11.
+        *   Funkce `extract_info_from_birth_number` extrahuje z RČ rok, měsíc, den a pohlaví, přičemž validuje platnost těchto komponent (např. platný měsíc, den).
+        *   V `create_fhir_patient_resource` dochází k porovnání data narození extrahovaného z RČ a data narození extrahovaného z textu (např. pole "Datum narození:"). Pokud nesouhlasí, je zaznamenán `quality_issue` s úrovní "warning". Toto je dobrá křížová validace.
+    *   **Fyziologické rozsahy:**
+        *   Při vytváření FHIR `Observation` zdrojů pro krevní tlak, pulz, teplotu, výšku a hmotnost (`create_fhir_observation_bp_resource`, `..._pulse_resource` atd.) jsou implementovány kontroly, zda naměřené hodnoty spadají do předdefinovaných "očekávaných fyziologických rozsahů" (např. systolický TK 50-300 mmHg, pulz 20-300/min).
+        *   Pokud je hodnota mimo rozsah, je zaznamenán `quality_issue` s úrovní "warning". Tyto rozsahy jsou poměrně široké, což je rozumné pro záchyt spíše extrémních odchylek.
+    *   **Časová konzistence:**
+        *   Při vytváření `Observation` a `Condition` zdrojů se kontroluje, zda `effectiveDateTime` nebo `recordedDate` (pokud je nastaveno, jinak se použije aktuální čas) neleží v daleké budoucnosti (více než 1 den). Pokud ano, je zaznamenán "warning". Toto je základní, ale užitečná kontrola.
+    *   **Komplexnost pravidel:**
+        *   Validace RČ je poměrně komplexní a snaží se pokrýt historické i novější formáty.
+        *   Validace data narození (`parse_date_to_fhir_format`) je robustní, podporuje různé číselné i textové formáty data (včetně českých názvů měsíců s/bez diakritiky a zkratek) a také formát YYYY-MM-DD.
+        *   Validační pravidla pro fyziologické rozsahy a časovou konzistenci jsou jednodušší, ale plní svůj účel základní kontroly.
+        *   Celkově je sada validačních pravidel na dobré úrovni pro daný účel.
+
+*   **Řešení problémů s kvalitou dat (`quality_issues_list`):**
+    *   Seznam `quality_issues_list` je systematicky předáván všem parsovacím a creačním funkcím.
+    *   Pokud dojde k problému při parsování (např. nevalidní formát data, nečíselné RČ) nebo při validaci (hodnota mimo rozsah, nesoulad RČ a data narození), je do tohoto seznamu přidán slovník popisující problém.
+    *   Každý záznam o problému typicky obsahuje:
+        *   `level`: Úroveň závažnosti ("error", "warning", "info").
+        *   `message`: Popis problému.
+        *   `field`: Název pole, kterého se problém týká.
+        *   `value`: Hodnota, která způsobila problém (pokud je relevantní).
+    *   Tento přístup umožňuje agregovat všechny zjištěné problémy během zpracování jednoho dokumentu a vrátit je spolu s FHIR zdroji. To je velmi dobré pro transparentnost a umožňuje uživateli (nebo systému) reagovat na problémy s kvalitou.
+    *   Použití různých úrovní umožňuje rozlišit kritické chyby (např. selhání parsování klíčového údaje) od méně závažných varování.
+
+### 2. Extrakce dat (`ai_models/text_extractor.py`, části `fhir_mapper.py`)
+
+*   **Hybridní model NLP (Stanza) a regulárních výrazů:**
+    *   **`ai_models/text_extractor.py`:**
+        *   Funkce `extract_text_from_document` při `use_nlp=True` a `nlp_engine="stanza"` volá `get_stanza_pipeline()` pro získání (a případnou inicializaci) Stanza pipeline pro češtinu (tokenizace, NER).
+        *   Následně zpracuje vstupní text pomocí této pipeline a extrahuje entity s jejich textem, typem, a pozicemi (`start_char`, `end_char`).
+        *   Pokud NLP zpracování selže (např. Stanza není dostupná nebo dojde k jiné chybě), kód je navržen tak, aby "propadl" a vrátil buď surový text (pokud `input_type="text"`) nebo výsledek OCR.
+    *   **`fhir_mapper.py`:**
+        *   Parsovací funkce (např. `parse_patient_data`, `parse_observation_data`, `parse_condition_data`, `parse_vital_signs_data`) nejprve zkouší využít NLP entity, pokud jsou poskytnuty (`nlp_entities` argument).
+        *   Pro nalezení relevantních NLP entit se používají pomocné funkce jako `find_nlp_entities_near_keyword`, která hledá entity daného typu v blízkosti klíčových slov (definovaných pomocí regexů).
+        *   Pro extrakci hodnoty a jednotky z textu NLP entity (např. pro vitální funkce) slouží `extract_value_and_unit_from_nlp_entity_text`.
+        *   Pokud NLP extrakce není úspěšná nebo nejsou NLP entity k dispozici, parsovací funkce použijí jako fallback regulární výrazy (definované na začátku souboru `fhir_mapper.py`) pro přímou extrakci dat z textu.
+    *   Tento hybridní přístup je silný, protože kombinuje flexibilitu a sémantické pochopení NLP s přesností a explicitností regulárních výrazů pro známé vzory.
+
+*   **OCR zpracování obrázků:**
+    *   V `extract_text_from_document`, pokud `input_type="image_path"`, se použije knihovna `Pillow` (PIL) pro otevření obrázku a `pytesseract` pro provedení OCR (`pytesseract.image_to_string`).
+    *   Podporuje specifikaci jazyka (výchozí `ces+eng`).
+    *   Jsou zde ošetřeny případy, kdy knihovny nejsou nainstalovány nebo Tesseract engine není nalezen v systému, a vrací se srozumitelné chybové zprávy.
+    *   Chyby při samotném OCR procesu jsou také zachytávány.
+
+*   **Robustnost extrakce klíčových entit:**
+    *   **Jméno pacienta:** Kombinace hledání NLP entit typu 'P' (Person) a atomických částí jména ('pt', 'pf', 'ps', 'pd') poblíž klíčových slov ("Pacient:", "Jméno pacienta:") a fallback na `REGEX_PATIENT_NAME`. Zdá se být poměrně robustní. Logika pro sestavování jména z atomických částí je přítomna.
+    *   **Datum narození:** Podobně kombinace NLP entit ('T', 'DATE', 'td', 'tm', 'ty') a `REGEX_BIRTH_DATE` s následným parsováním pomocí `parse_date_to_fhir_format`, která je sama o sobě robustní vůči různým formátům.
+    *   **Rodné číslo:** Primárně řešeno pomocí `REGEX_BIRTH_NUMBER`. NLP by zde mohlo být méně spolehlivé.
+    *   **Diagnózy:** Hledání NLP entit typu 'DIS' (Disease) poblíž klíčových slov ("Diagnóza:", "Závěr:") s logikou pro spojování navazujících DIS entit. Fallback na `REGEX_DIAGNOSIS_TEXT`. Extrakce diagnóz je obecně náročná, ale implementace se zdá být promyšlená.
+    *   **Vitální funkce (TK, pulz, teplota, výška, hmotnost):** Každá má své specifické klíčové slova a regexy. Využívají se NLP entity typu 'CARDINAL' nebo 'NUMBER' v kombinaci s `extract_value_and_unit_from_nlp_entity_text` pro získání hodnoty a jednotky. Fallback na globální regexy. Tento přístup je dobrý.
+    *   **Celkově:** Hybridní přístup (NLP + Regex) a specifické regexy pro jednotlivé entity zvyšují šanci na úspěšnou extrakci. Míra robustnosti bude vždy záviset na variabilitě a kvalitě vstupních textů. Použití NLP pomáhá s nečekanými formulacemi, zatímco regexy pokrývají standardní formáty. Systém `quality_issues` pomáhá identifikovat, kde extrakce selhala nebo byla nejednoznačná.
+
+### 3. Integrace s DigiMedic API (`digimedic_api_client.py`, `main.py`)
+
+*   **Simulovaný a reálný režim klienta:**
+    *   V `DigiMedicAPIClient.__init__` je atribut `self.simulate` (výchozí `True`), který řídí chování.
+    *   Pokud `self.simulate` je `True`, metody `send_fhir_resource` a `send_fhir_bundle` pouze logují (print) informaci o simulovaném odeslání a data, která by byla odeslána, a vrací simulovanou úspěšnou odpověď.
+    *   Pokud `self.simulate` je `False`, klient se pokusí o reálná HTTP volání pomocí knihovny `requests`.
+
+*   **Sestavení FHIR Bundle a jeho odeslání:**
+    *   V `main.py`, v endpointu `process_document_endpoint`, po úspěšném mapování na FHIR zdroje (`fhir_resources`), se vytváří FHIR Bundle:
+        *   `resourceType` je "Bundle".
+        *   `id` je generován pomocí `generate_fhir_id()`.
+        *   `type` je nastaven na "transaction", což je správné pro odeslání sady změn, které by měly být atomicky zpracovány.
+        *   Každý FHIR zdroj ze seznamu `fhir_resources` je přidán do `bundle.entry[]`.
+        *   Pro každou položku v `entry` je specifikováno:
+            *   `fullUrl`: `urn:uuid:{resource_id}` (pro nové zdroje) nebo relativní cesta. V kódu je použito `urn:uuid:{resource['id']}` což je vhodné pro transakce, kde server může toto ID respektovat nebo přidělit nové.
+            *   `resource`: Samotný FHIR zdroj.
+            *   `request`: Obsahuje `method` ("PUT" – což naznačuje, že se očekává, že ID zdroje je již klientem definováno a server provede "update or create") a `url` (např. "Patient/{id}"). Použití PUT pro všechny zdroje v transakci je běžné, pokud klient generuje ID.
+    *   Následně je tento bundle odeslán pomocí `api_client.send_fhir_bundle(fhir_bundle)`.
+
+*   **Konfigurace API (URL, token):**
+    *   V `DigiMedicAPIClient.__init__`:
+        *   Pokud je klient v reálném režimu (`simulate=False`):
+            1.  Nejprve se pokusí načíst `DIGIMEDIC_API_BASE_URL` a `DIGIMEDIC_API_TOKEN` z argumentů konstruktoru.
+            2.  Pokud nejsou v argumentech, pokusí se je načíst z proměnných prostředí (`os.environ.get`).
+            3.  Pokud ani jedna z metod neposkytne kompletní konfiguraci, vypíše varování a použije simulované hodnoty jako fallback (i v reálném režimu, což je trochu matoucí, ale zabrání pádu).
+        *   Pokud je klient v simulovaném režimu, použijí se hodnoty z argumentů nebo defaultní simulované hodnoty.
+    *   Tato hierarchie konfigurace (argumenty > proměnné prostředí > default/simulované) je flexibilní.
+    *   Token je přidáván do `Authorization: Bearer {token}` hlavičky.
+
+### 4. Orchestrace a API endpointy (`main.py`)
+
+*   **Endpoint `/api/process_document` (tok zpracování):**
+    1.  **Nahrání souboru:** Přijme `UploadFile`, vygeneruje bezpečný název souboru a uloží ho do dočasného adresáře `TEMP_UPLOAD_DIR`.
+    2.  **Rozlišení typu souboru:** Na základě `file.content_type`:
+        *   **`text/plain`**: Přečte obsah souboru. Zavolá `extract_text_from_document` s `input_type="text"` a `use_nlp=True`. Výstup (seznam NLP entit nebo fallback string) a původní text se uloží.
+        *   **`image/png`, `image/jpeg`, `image/jpg`**: Zavolá `extract_text_from_document` s `input_type="image_path"` (cesta k dočasnému souboru). Výstup (OCR text) se uloží jako `extracted_data_for_fhir` i `original_text_for_fhir`.
+        *   **Jiný typ**: Vyvolá `HTTPException` (status 400).
+    3.  **Kontrola extrahovaných dat:** Ověří, zda extrahovaná data nejsou prázdná nebo neobsahují chybovou zprávu z OCR. Pokud ano, vrátí prázdný `ProcessingResult`.
+    4.  **Mapování na FHIR:** Zavolá `map_text_to_fhir` s extrahovanými daty a původním textem. Získá `fhir_resources` a `quality_issues`.
+    5.  **Logování quality issues:** Pokud existují, jsou zalogovány (print).
+    6.  **Odeslání FHIR Bundle:** Pokud byly vygenerovány nějaké FHIR zdroje:
+        *   Vytvoří instanci `DigiMedicAPIClient`.
+        *   Sestaví FHIR Bundle typu "transaction" (jak popsáno výše).
+        *   Odešle bundle pomocí `api_client.send_fhir_bundle()`.
+        *   Zaloguje odpověď z API.
+    7.  **Vrácení výsledku:** Vrátí `ProcessingResult` obsahující `fhir_resources` a `quality_issues`.
+    8.  **Čištění:** Ve `finally` bloku smaže dočasný soubor a uzavře soubor od klienta.
+    *   Orchestrace je logická a pokrývá hlavní kroky. Rozhodnutí použít NLP pro textové soubory a pouze OCR pro obrázky (a následně předat tento text do `map_text_to_fhir`, který může interně opět použít NLP, pokud dostane entity, nebo regexy pokud dostane string) je implementováno.
+
+*   **Endpoint `/api/suggest_correction`:**
+    *   Přijímá `CorrectionSuggestionPayload` (Pydantic model), který obsahuje detaily původního problému (`originalIssue`), navrhovanou hodnotu (`suggestedValue`) a název souboru.
+    *   Aktuální implementace pouze loguje (print) přijatá data.
+    *   Je zde poznámka, že v budoucnu by zde mohla být logika pro uložení návrhu do databáze atd.
+    *   Vrací jednoduchou zprávu o úspěšném přijetí a zalogování.
+    *   Ošetřuje obecné výjimky a vrací `HTTPException` 500.
+
+*   **Podpora vstupních formátů:**
+    *   Je zřejmá z `if/elif/else` bloku v `process_document_endpoint`, který kontroluje `file.content_type`.
+    *   Explicitně jsou podporovány `text/plain`, `image/png`, `image/jpeg`, `image/jpg`.
+    *   Ostatní typy jsou odmítnuty s HTTP 400.
+
+### Závěr k validaci funkcionalit
+
+Implementace klíčových funkcionalit se jeví jako poměrně propracovaná a robustní na základě statické analýzy kódu.
+
+*   **FHIR Mapování** je detailní, s mnoha validačními pravidly a dobrým systémem pro sledování problémů s kvalitou.
+*   **Extrakce dat** využívá silný hybridní přístup (NLP + Regex) a standardní nástroje pro OCR. Robustnost je podpořena fallback mechanismy.
+*   **Integrace s DigiMedic API** je flexibilní díky simulovanému/reálnému režimu a podpoře konfigurace přes proměnné prostředí. Sestavování Bundle je korektní pro transakční zpracování.
+*   **Orchestrace v `main.py`** logicky spojuje jednotlivé kroky zpracování dokumentu a poskytuje jasné API endpointy.
+
+Potenciální oblasti pro další zpřesnění (které často vyplynou až z testování a reálného provozu) by mohly zahrnovat rozšíření regexů pro ještě větší variabilitu vstupů, doladění NLP extrakce pro specifické případy, nebo zpřesnění fyziologických validačních rozsahů. Systém `quality_issues` je dobrým základem pro iterativní vylepšování.

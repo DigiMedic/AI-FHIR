@@ -1,0 +1,86 @@
+## Zhodnocení README.md a konfiguračních souborů
+
+Toto zhodnocení se zaměřuje na soubor `README.md` a související `.env.example` soubory (`backend/.env.example`, `frontend/.env.example`).
+
+### 1. Jasnost a úplnost instrukcí v `README.md`
+
+*   **Sekce "Předpoklady":**
+    *   Srozumitelně uvádí Node.js, Python, Tesseract OCR a přístup k DigiMedic Backend API (i když ten je pro lokální vývoj s DigiMedicAPIClient v simulovaném režimu volitelný).
+    *   Dobře je zmíněno automatické stahování Stanza modelu a potřeba připojení k internetu.
+    *   **Nejasnost/Chybějící:** Mohla by být uvedena doporučená verze Pythonu (např. 3.9+), aby se předešlo potenciálním problémům s kompatibilitou. Není explicitně zmíněno, jak instalovat Python závislosti (např. `pip install -r backend/requirements.txt`), i když se na soubor `requirements.txt` odkazuje.
+
+*   **Sekce "Instalace":**
+    *   Klonování repozitáře je jasné.
+    *   Instalace frontendových závislostí (`cd frontend && npm install`) je standardní a srozumitelná.
+    *   **Chybějící:** Chybí explicitní krok pro instalaci backendových závislostí. Ačkoliv "Předpoklady" zmiňují "závislosti uvedených v `backend/requirements.txt`", krok `pip install -r backend/requirements.txt` (nebo ekvivalent s virtuálním prostředím) by měl být explicitně uveden v instalační sekci.
+    *   Nastavení proměnných prostředí je popsáno, včetně kopírování `.env.example` souborů. Popis je relativně jasný.
+
+*   **Sekce "Spuštění vývojových serverů":**
+    *   Příkazy pro spuštění backendu (`uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`) i frontendu (`npm start` z adresáře `frontend`) jsou korektní a standardní.
+    *   Je specifikováno, z jakého adresáře se mají příkazy spouštět.
+
+*   **Sekce "Spuštění testů":**
+    *   Příkazy pro spuštění backendových (`pytest backend/tests`) i frontendových (`npm test`) testů jsou uvedeny.
+    *   Je zmíněna potřeba instalace `pytest`.
+    *   Poznámka k možným problémům se spuštěním frontendových testů v CI prostředích je užitečná.
+
+**Celkově jsou instrukce v hlavních sekcích srozumitelné, ale vyžadují drobné doplnění ohledně instalace backendových závislostí a specifikace Python verze.**
+
+### 2. Konfigurace prostředí
+
+*   **Jasnost `.env.example` souborů:**
+    *   **`backend/.env.example`**: Jasně vysvětluje účel proměnných `DIGIMEDIC_API_BASE_URL` a `DIGIMEDIC_API_TOKEN` a uvádí, že jsou potřeba pro reálný režim DigiMedicAPIClient. Zmiňuje, že v opačném případě klient běží v simulovaném režimu. Komentáře jsou srozumitelné.
+    *   **`frontend/.env.example`**: Vysvětluje prefix `REACT_APP_` a účel proměnné `REACT_APP_API_URL` pro nastavení adresy backendu. Odkaz na dokumentaci Create React App je užitečný.
+
+*   **Pokrytí potřebných konfiguračních proměnných:**
+    *   **Backend:** Proměnné `DIGIMEDIC_API_BASE_URL` a `DIGIMEDIC_API_TOKEN` jsou klíčové a jsou pokryty. V kódu `digimedic_api_client.py` se tyto proměnné skutečně používají. Jiné specifické aplikační proměnné nebyly v kódu identifikovány jako kritické pro základní běh (kromě standardních pro `uvicorn`, které jsou spíše pro nasazení).
+    *   **Frontend:** Proměnná `REACT_APP_API_URL` je pokryta a používá se v `App.js` (i když v testech je vidět `http://localhost:8000/api` napevno, v reálné aplikaci by se měla používat proměnná prostředí).
+
+*   **Vytvoření `.env` souborů:**
+    *   README v sekci "Instalace" (bod 3) jasně popisuje, že je třeba zkopírovat `.env.example` soubory na `.env` a upravit hodnoty. Tento postup je standardní a dobře vysvětlený.
+
+**Konfigurace prostředí je popsána dostatečně a soubory `.env.example` jsou srozumitelné.**
+
+### 3. Úplnost dokumentace
+
+*   **Přehled projektu, cíle a architektura:**
+    *   README poskytuje dobrý přehled o projektu, problému, který řeší, a navrhovaném řešení.
+    *   Klíčové funkce jsou vyjmenovány.
+    *   Sekce "Technologický stack" stručně zmiňuje použité technologie.
+    *   Odkazy na diagramy architektury a toku zpracování jsou velmi užitečné pro pochopení celkového návrhu.
+
+*   **Aktuálnost sekce "Roadmapa":**
+    *   Roadmapa je rozdělena do fází. Na základě předchozích analýz kódu a testů se zdá být relativně aktuální:
+        *   Fáze 1 a 2 jsou označeny jako dokončené ([x]), což odpovídá existující základní funkcionalitě.
+        *   Fáze 3 "Vylepšení a optimalizace":
+            *   Integrace NLP modelu (Stanza) je označena jako dokončená ([x]), což odpovídá implementaci v `text_extractor.py` a `fhir_mapper.py`.
+            *   "Případné dotrénování (fine-tuning) modelu" je správně označeno jako neprovedené ([ ]).
+            *   Pokročilá validace a návrh korekce dat: Backend generuje "quality issues" ([x]), UI pro návrh korekcí je implementováno ([x]), ale plnohodnotné zpracování korekcí je budoucí krok.
+            *   Vylepšení UI/UX: Částečně implementováno ([~]) zobrazením quality issues.
+            *   Formalizace testování: Backend testy jsou rozšířené ([x]), frontend má základní testy ([~]). Profilování je označeno jako částečně provedené ([~]).
+        *   Fáze 4 "Testování a finalizace":
+            *   Komplexní testování je částečně implementováno ([~]).
+            *   Implementován reálný DigiMedic API klient ([x]), ale plná integrace s produkčním API je další krok.
+            *   Uživatelská dokumentace a příprava na nasazení jsou označeny jako neprovedené ([ ]).
+    *   Celkově roadmapa dobře reflektuje současný stav projektu, jak byl odvozen z kódu.
+
+*   **Další formy dokumentace:**
+    *   Explicitně je zmíněna "Tvorba uživatelské dokumentace" jako budoucí krok ve Fázi 4.
+    *   API dokumentace (např. Swagger/OpenAPI generovaná z FastAPI) není explicitně zmíněna v README, ale FastAPI ji poskytuje automaticky, což by mohlo být pro vývojáře užitečné zmínit.
+
+**README poskytuje dobrý přehled a roadmapa se zdá být aktuální. Zmínka o budoucí uživatelské dokumentaci je přítomna.**
+
+### 4. Případné nejasnosti nebo chybějící informace
+
+*   **Instalace backendových závislostí:** Jak již bylo zmíněno, chybí explicitní příkaz `pip install -r backend/requirements.txt` (nebo doporučení pro virtuální prostředí).
+*   **Specifikace Python verze:** Doporučení konkrétní verze Pythonu by bylo užitečné.
+*   **Tesseract OCR instalace:** README zmiňuje, že Tesseract musí být nainstalován, ale neposkytuje žádné pokyny ani odkazy na to, jak jej nainstalovat na různých operačních systémech. To může být pro některé uživatele překážka. Přidání odkazu na oficiální dokumentaci Tesseractu nebo stručné pokyny by bylo přínosné.
+*   **Struktura projektu v README:** Mohla by být přidána krátká sekce popisující strukturu adresářů projektu (kde je backend, frontend, testy atd.), i když pro zkušenější vývojáře to může být zřejmé.
+*   **API dokumentace (Swagger/OpenAPI):** Jelikož backend používá FastAPI, automaticky generovaná interaktivní API dokumentace (typicky na `/docs` a `/redoc` endpointu běžící aplikace) je cenným zdrojem. Zmínka o tom v README by byla užitečná pro vývojáře, kteří chtějí prozkoumat API.
+*   **Detailnější informace k DigiMedic API:** README zmiňuje "Přístup k DigiMedic Backend API" jako předpoklad. Pro vývojáře, kteří by chtěli testovat reálný režim, by mohlo být užitečné (pokud to není citlivá informace) uvést, kde získat testovací přístup nebo více informací o tomto API, pokud je to veřejně dostupné nebo existuje nějaký vývojářský portál.
+
+### Závěr
+
+Dokumentace v `README.md` spolu s `.env.example` soubory poskytuje dobrý základ pro pochopení projektu, jeho instalaci a spuštění. Hlavní instrukce jsou přítomny a srozumitelné. Roadmapa adekvátně reflektuje stav projektu.
+
+Největší prostor pro zlepšení je v explicitním uvedení příkazu pro instalaci backendových závislostí, specifikaci verze Pythonu a poskytnutí detailnějších pokynů nebo odkazů pro instalaci Tesseractu. Zmínka o automaticky generované API dokumentaci FastAPI by také byla přínosem. Celkově je však dokumentace na slušné úrovni.
