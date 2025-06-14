@@ -26,6 +26,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 6. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
 7.  **Automatické odesílání na DigiMedic FHIR Server**: Po úspěšné extrakci a transformaci dat na FHIR zdroje komponenta automaticky sestaví FHIR Bundle a odešle jej na nakonfigurovaný DigiMedic FHIR server. Tato funkce pracuje ve výchozím simulovaném režimu. Pro odesílání na reálný server je nutné nastavit proměnné prostředí `DIGIMEDIC_API_BASE_URL` a `DIGIMEDIC_API_TOKEN`.
 8.  **Detailní záznamy o kvalitě zpracování**: Během procesu extrakce a mapování systém interně sbírá podrobné informace o možných problémech nebo nestandardních hodnotách (tzv. "quality issues"). Tyto záznamy jsou logovány na serveru a poskytují cennou zpětnou vazbu pro monitorování a budoucí vylepšení, včetně podpory pro uživatelské rozhraní při revizi dat.
+9.  **Návrhy na korekci dat**: Uživatelské rozhraní umožňuje u každého identifikovaného problému s kvalitou dat ("quality issue") navrhnout korekci. Tyto návrhy jsou odesílány na backendový endpoint (`/api/suggest_correction`) pro zaznamenání a budoucí zpracování.
 
 ### Technologický stack
 - **Frontend**: React.js
@@ -85,7 +86,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
 - [x] **Pokročilá validace a návrh korekce dat:**
     - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
-    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích). Backend nyní generuje strukturované "quality issues", které mohou sloužit jako základ pro tuto UI funkcionalitu.
+    - [x] Pokročilá validace a návrh korekce dat: Backend generuje strukturované "quality issues". Implementována základní UI funkcionalita ve frontendu pro navrhování korekcí k těmto issues; návrhy jsou logovány na backendu. Plnohodnotné zpracování korekcí a integrace do UI pro revizi dat jsou dalšími kroky.
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
     - [~] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend poskytuje strukturované 'quality issues', frontend nyní tyto problémy zobrazuje přehledněji).
@@ -135,8 +136,10 @@ pytest backend/tests
 
 # Spuštění frontendových testů (z adresáře `frontend`):
 npm test
-# Poznámka: Aktuální konfigurace frontendových testů v package.json pouze vypisuje zprávu
-# a neobsahuje reálné testy. Pro plnohodnotné testování frontendu je potřeba testy implementovat.
+# Poznámka k frontendovým testům:
+# Sada základních testů pro frontendovou komponentu App byla implementována v `frontend/src/App.test.js`.
+# V některých omezených (např. sandboxed CI) prostředích může spuštění `npm test` selhat kvůli environmentálním omezením (např. timeout).
+# Doporučuje se proto spouštět frontendové testy v lokálním vývojovém prostředí pro ověření jejich funkčnosti.
 ```
 
 ## Přispívání
