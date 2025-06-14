@@ -5,20 +5,23 @@ import sys
 import os
 import shutil
 import uuid # Pro generování unikátních názvů souborů
+import json # Pro logování quality_issues
 
 # Přidání cesty k 'backend' adresáři, aby bylo možné importovat z podmodulů
 # Toto je relevantní, pokud spouštíme `uvicorn backend.main:app` z kořenového adresáře projektu.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 try:
-    from backend.fhir_mapper import map_text_to_fhir
+    from backend.fhir_mapper import map_text_to_fhir, generate_fhir_id # Added generate_fhir_id
     from backend.ai_models.text_extractor import extract_text_from_document
+    from backend.digimedic_api_client import DigiMedicAPIClient # Added DigiMedicAPIClient
 except ImportError as e:
     print(f"Import error: {e}. Trying relative imports.", file=sys.stderr)
     # Fallback pro případ, kdy je skript spuštěn jinak nebo sys.path není správně nastaven
     # např. python -m backend.main
-    from .fhir_mapper import map_text_to_fhir
+    from .fhir_mapper import map_text_to_fhir, generate_fhir_id # Added generate_fhir_id
     from .ai_models.text_extractor import extract_text_from_document
+    from .digimedic_api_client import DigiMedicAPIClient # Added DigiMedicAPIClient
 
 
 app = FastAPI(
@@ -109,10 +112,62 @@ async def process_document_endpoint(file: UploadFile = File(...)):
         print(f"DEBUG: Data pro FHIR mapování (typ: {type(extracted_data_for_fhir)}): {str(extracted_data_for_fhir)[:200]}...")
         print(f"DEBUG: Original_text pro FHIR mapování (prvních 200 znaků): {original_text_for_fhir[:200]}...")
 
-        fhir_resources = map_text_to_fhir(extracted_data_for_fhir, original_text=original_text_for_fhir)
+        mapping_output = map_text_to_fhir(extracted_data_for_fhir, original_text=original_text_for_fhir)
+        fhir_resources = mapping_output.get("fhir_resources", [])
+        quality_issues = mapping_output.get("quality_issues", [])
+
+        if quality_issues:
+            # Logování quality issues ve formátu JSON pro lepší čitelnost
+            # Použijeme ensure_ascii=False pro správné zobrazení diakritiky v logu, pokud by se tam dostala.
+            # indent=2 pro pretty print.
+            try:
+                issues_json = json.dumps(quality_issues, indent=2, ensure_ascii=False)
+                print(f"INFO [Main]: Quality issues reported from FHIR Mapper for {file.filename}:\n{issues_json}")
+            except TypeError as json_err: # Pro případ, že by quality_issues nebyly serializovatelné
+                print(f"CHYBA [Main]: Nelze serializovat quality_issues do JSON: {json_err}. Issues: {quality_issues}", file=sys.stderr)
+
 
         if not fhir_resources:
-             print(f"INFO: Funkce map_text_to_fhir vrátila prázdný seznam pro data z {file.filename}.")
+             print(f"INFO: Funkce map_text_to_fhir vrátila prázdný seznam FHIR resources pro data z {file.filename}.")
+        else:
+            # Integrate DigiMedicAPIClient
+            try:
+                api_client = DigiMedicAPIClient()
+
+                bundle_id = generate_fhir_id()
+                bundle_entries = []
+                for resource in fhir_resources:
+                    if resource and 'resourceType' in resource and 'id' in resource:
+                        entry = {
+                            "fullUrl": f"urn:uuid:{resource['id']}",
+                            "resource": resource,
+                            "request": {
+                                "method": "PUT",
+                                "url": f"{resource['resourceType']}/{resource['id']}"
+                            }
+                        }
+                        bundle_entries.append(entry)
+                    else:
+                        print(f"WARN: Skipping invalid resource in fhir_resources: {resource}", file=sys.stderr)
+
+                if bundle_entries: # Only send if there are valid entries
+                    fhir_bundle = {
+                        "resourceType": "Bundle",
+                        "id": bundle_id,
+                        "type": "transaction", # Or "batch"
+                        "entry": bundle_entries
+                    }
+
+                    print(f"DEBUG: Sending FHIR Bundle (ID: {bundle_id}) with {len(bundle_entries)} entries to DigiMedic API.")
+                    api_response = api_client.send_fhir_bundle(fhir_bundle)
+                    print(f"INFO: Response from DigiMedic API: {api_response}")
+                else:
+                    print("INFO: No valid resources to send in a FHIR bundle.")
+
+            except Exception as api_ex:
+                print(f"CHYBA: Nepodařilo se odeslat FHIR bundle přes DigiMedicAPIClient: {str(api_ex)}", file=sys.stderr)
+                # Pokračujeme a vracíme fhir_resources, i když odeslání selhalo
+
         return fhir_resources
 
     except HTTPException:
