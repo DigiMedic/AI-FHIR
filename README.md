@@ -19,7 +19,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 
 ### Klíčové funkce
 1. **Podpora více formátů**: Zpracování textových dokumentů, PDF a naskenovaných obrázků.
-2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí NLP a ML modelů.
+2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu kombinujícího rozpoznávání pojmenovaných entit (NER) s modelem Stanza (pro češtinu) a pokročilých regulárních výrazů.
 3. **FHIR mapování**: Automatická konverze dat do FHIR zdrojů.
 4. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
 5. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
@@ -27,6 +27,7 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 ### Technologický stack
 - **Frontend**: React.js s použitím shadcn/ui
 - **AI modely**: GPT-4.0, vlastní NLP modely
+- **NER model**: Stanza (knihovna od Stanford NLP Group, model `cs_cnec` pro češtinu)
 - **OCR**: Tesseract
 - **Backend**: DigiMedic FHIR Backend API
 
@@ -76,8 +77,8 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
 - [ ] **Integrace NLP modelu pro extrakci entit:**
-    - [ ] Výběr a testování předtrénovaného NLP modelu (např. pro češtinu ze spaCy/Hugging Face).
-    - [ ] Návrh a implementace hybridního přístupu (kombinace NLP a stávajících regexů).
+    - [x] Výběr a testování předtrénovaného NLP modelu (vybrán `stanfordnlp/stanza-cs` s modelem `cs_cnec`, licence Apache 2.0).
+    - [x] Návrh hybridního přístupu (kombinace NLP a stávajících regexů) a jeho počáteční implementace pro klíčové entity (jméno pacienta, datum narození).
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
 - [ ] **Pokročilá validace a návrh korekce dat:**
     - [ ] Rozšíření validace extrahovaných dat (např. RČ vs datum narození, fyziologické rozsahy).
@@ -99,6 +100,9 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 ### Předpoklady
 - Node.js (v14 nebo novější)
 - Přístup k DigiMedic Backend API
+- Python pro backendovou část (včetně závislostí uvedených v `backend/requirements.txt`)
+- Tesseract OCR engine nainstalovaný v systému (pro zpracování obrázků).
+- Poznámka: Při prvním spuštění komponenty, která využívá NLP model Stanza, může dojít k automatickému stažení jazykového modelu pro češtinu (pokud již není přítomen v systému v defaultním umístění Stanza modelů, typicky `~/stanza_resources`). Toto stažení vyžaduje připojení k internetu.
 
 ### Instalace
 1. Naklonujte repozitář:

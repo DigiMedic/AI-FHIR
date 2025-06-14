@@ -1,6 +1,7 @@
 # backend/fhir_mapper.py
 import re
 import json
+from typing import Union, List, Dict, Any, Optional
 from datetime import datetime
 import uuid
 import unicodedata # Potřebné pro odstranění diakritiky
@@ -271,14 +272,15 @@ def generate_fhir_id() -> str:
 
 # --- Funkce pro parsování specifických dat z textu ---
 
-def parse_patient_data(text: str) -> dict:
+def parse_patient_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) -> dict:
     """
-    Parsování základních demografických údajů o pacientovi z textu.
+    Parsování základních demografických údajů o pacientovi z textu, s možností využití NLP entit.
 
     Extrahuje jméno, datum narození a rodné číslo.
 
     Args:
-        text: Vstupní text lékařské zprávy.
+        nlp_entities: Seznam NLP entit (může být None).
+        text: Vstupní text lékařské zprávy pro regex fallback.
 
     Returns:
         Slovník s extrahovanými daty pacienta. Klíče:
@@ -287,64 +289,100 @@ def parse_patient_data(text: str) -> dict:
         - "birth_date_raw": Původní extrahovaný řetězec data narození (pokud FHIR formát selže).
         - "birth_number_raw": Extrahované rodné číslo (s nebo bez lomítka).
     """
-    patient_data = {} # Inicializace prázdného slovníku pro data pacienta
+    patient_data = {}
+    found_name_by_nlp = False
+    found_birth_date_by_nlp = False
 
-    # Extrakce jména pacienta
-    name_match = re.search(REGEX_PATIENT_NAME, text, re.IGNORECASE)
-    if name_match:
-        patient_data["full_name"] = name_match.group(1).strip()
-        print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta: {patient_data['full_name']}")
+    if nlp_entities:
+        # Extrakce jména pacienta pomocí NLP
+        person_entities = [ent for ent in nlp_entities if ent.get('type') == 'P']
+        if person_entities:
+            main_person_entity = next((ent for ent in nlp_entities if ent.get('type') == 'P'), None)
+            if main_person_entity:
+                patient_data["full_name"] = main_person_entity['text'].strip()
+                found_name_by_nlp = True
+                print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (NLP typ P): {patient_data['full_name']}")
+            else:
+                sorted_name_parts_entities = sorted(
+                    [ent for ent in nlp_entities if ent.get('type') in ['pt', 'pf', 'ps', 'pd']],
+                    key=lambda x: x['start_char']
+                )
+                current_person_parts = []
+                for ent in sorted_name_parts_entities:
+                    if not current_person_parts or ent['start_char'] < current_person_parts[-1]['end_char'] + 5:
+                        current_person_parts.append(ent)
+                    else:
+                        break
+                if current_person_parts:
+                    assembled_name_text = " ".join([p['text'] for p in current_person_parts])
+                    patient_data["full_name"] = assembled_name_text.strip()
+                    found_name_by_nlp = True
+                    print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (NLP atomické typy): {patient_data['full_name']}")
 
-    # Extrakce data narození
-    birth_date_match = re.search(REGEX_BIRTH_DATE, text, re.IGNORECASE)
-    if birth_date_match:
-        raw_date = birth_date_match.group(1).strip()
-        print(f"DEBUG [FHIR Mapper]: Nalezen surový řetězec data narození (před čištěním): '{raw_date}'")
+        # Extrakce data narození pomocí NLP
+        date_entities_nlp = [ent for ent in nlp_entities if ent.get('type') in ['T', 'DATE', 'td', 'tm', 'ty']]
+        date_entities_nlp.sort(key=lambda x: x['start_char'])
+        for ent in date_entities_nlp:
+            if ent.get('type') in ['T', 'DATE']:
+                raw_date_nlp = ent['text'].strip()
+                parsed_date_nlp = parse_date_to_fhir_format(raw_date_nlp)
+                if parsed_date_nlp:
+                    patient_data["birth_date_fhir"] = parsed_date_nlp
+                    patient_data["birth_date_raw"] = raw_date_nlp
+                    found_birth_date_by_nlp = True
+                    print(f"DEBUG [FHIR Mapper]: Nalezeno datum narození (NLP): {raw_date_nlp} -> {parsed_date_nlp}")
+                    break
 
-        # Dodatečné oříznutí, pokud raw_date obsahuje další klíčová slova, která by neměla být součástí data
-        # Toto řeší případy, kdy REGEX_BIRTH_DATE zachytí více textu, než je samotné datum
-        # (např. pokud RČ následuje na stejném řádku hned za datem).
-        stop_keywords = [
-            "RČ", "R.č.", "Rodné číslo",
-            "Pojišťovna", "Poj.",
-            "Bydliště", "Bydl.",
-            "Kontakt", "Tel.",
-            "Oddělení", "Odd.",
-            "Status",
-            "Poznámka", "Pozn.",
-            "---"
-        ]
-        for keyword in stop_keywords:
-            # Použijeme re.split pro case-insensitive dělení a vezmeme první část
-            parts = re.split(r'\b' + re.escape(keyword) + r'\b', raw_date, maxsplit=1, flags=re.IGNORECASE)
-            if len(parts) > 1: # Pokud byl keyword nalezen a došlo k rozdělení
-                raw_date = parts[0].strip()
-                print(f"DEBUG [FHIR Mapper]: Řetězec data narození oříznut klíčovým slovem '{keyword}': '{raw_date}'")
+    # Fallback na Regex pro jméno, pokud NLP nenašlo
+    if not found_name_by_nlp and text:
+        name_match = re.search(REGEX_PATIENT_NAME, text, re.IGNORECASE)
+        if name_match:
+            patient_data["full_name"] = name_match.group(1).strip()
+            print(f"DEBUG [FHIR Mapper]: Nalezeno jméno pacienta (Regex fallback): {patient_data['full_name']}")
 
-        print(f"DEBUG [FHIR Mapper]: Nalezen řetězec data narození (po čištění): '{raw_date}'")
-        patient_data["birth_date_fhir"] = parse_date_to_fhir_format(raw_date)
-        if not patient_data["birth_date_fhir"]:
-            patient_data["birth_date_raw"] = raw_date # Uložíme původní, pokud parsování selhalo
-            print(f"DEBUG [FHIR Mapper]: Datum narození '{raw_date}' se nepodařilo převést do FHIR formátu, uloženo raw.")
-        else:
-            print(f"DEBUG [FHIR Mapper]: Datum narození '{raw_date}' převedeno do FHIR formátu: {patient_data['birth_date_fhir']}")
+    # Fallback na Regex pro datum narození, pokud NLP nenašlo
+    if not found_birth_date_by_nlp and text:
+        birth_date_match = re.search(REGEX_BIRTH_DATE, text, re.IGNORECASE)
+        if birth_date_match:
+            raw_date_regex = birth_date_match.group(1).strip()
+            print(f"DEBUG [FHIR Mapper]: Nalezen surový řetězec data narození (Regex fallback, před čištěním): '{raw_date_regex}'")
+            stop_keywords = [
+                "RČ", "R.č.", "Rodné číslo", "Pojišťovna", "Poj.", "Bydliště", "Bydl.",
+                "Kontakt", "Tel.", "Oddělení", "Odd.", "Status", "Poznámka", "Pozn.", "---"
+            ]
+            cleaned_date_regex = raw_date_regex
+            for keyword in stop_keywords:
+                parts = re.split(r'\b' + re.escape(keyword) + r'\b', cleaned_date_regex, maxsplit=1, flags=re.IGNORECASE)
+                if len(parts) > 1:
+                    cleaned_date_regex = parts[0].strip()
+                    print(f"DEBUG [FHIR Mapper]: Řetězec data narození (Regex fallback) oříznut klíčovým slovem '{keyword}': '{cleaned_date_regex}'")
 
-    # Extrakce rodného čísla
-    birth_number_match = re.search(REGEX_BIRTH_NUMBER, text, re.IGNORECASE)
-    if birth_number_match:
-        patient_data["birth_number_raw"] = birth_number_match.group(1).strip()
-        print(f"DEBUG [FHIR Mapper]: Nalezeno rodné číslo: {patient_data['birth_number_raw']}")
+            parsed_date_regex = parse_date_to_fhir_format(cleaned_date_regex)
+            if parsed_date_regex:
+                patient_data["birth_date_fhir"] = parsed_date_regex
+                print(f"DEBUG [FHIR Mapper]: Nalezeno datum narození (Regex fallback): {cleaned_date_regex} -> {parsed_date_regex}")
+            else:
+                patient_data["birth_date_raw"] = cleaned_date_regex # Uložíme původní z regexu
+                print(f"DEBUG [FHIR Mapper]: Datum narození z Regex '{cleaned_date_regex}' se nepodařilo převést do FHIR formátu.")
+
+    # Extrakce rodného čísla (zatím primárně Regex, NLP by mohlo být přidáno později)
+    if text: # Rodné číslo stále hledáme v textu pomocí regexu
+        birth_number_match = re.search(REGEX_BIRTH_NUMBER, text, re.IGNORECASE)
+        if birth_number_match:
+            patient_data["birth_number_raw"] = birth_number_match.group(1).strip()
+            print(f"DEBUG [FHIR Mapper]: Nalezeno rodné číslo (Regex): {patient_data['birth_number_raw']}")
 
     print(f"DEBUG [FHIR Mapper]: Ukončeno parsování dat pacienta. Výsledek: {patient_data}")
     return patient_data
 
-def parse_observation_data(text: str) -> dict:
+def parse_observation_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) -> dict:
     """
     Parsování dat pro krevní tlak z textu.
     Poznámka: Tato funkce je v současnosti zaměřena pouze na krevní tlak.
     Pro rozšíření o další pozorování by bylo vhodné ji refaktorovat nebo vytvořit obecnější parser.
 
     Args:
+        nlp_entities: Seznam NLP entit (aktuálně se nevyužívá v této funkci).
         text: Vstupní text lékařské zprávy.
 
     Returns:
@@ -367,11 +405,12 @@ def parse_observation_data(text: str) -> dict:
     # print(f"DEBUG [FHIR Mapper]: Parsed specific observation data: {observation_data}")
     return observation_data
 
-def parse_condition_data(text: str) -> dict:
+def parse_condition_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) -> dict:
     """
     Parsování textu diagnózy z lékařské zprávy.
 
     Args:
+        nlp_entities: Seznam NLP entit (aktuálně se nevyužívá v této funkci).
         text: Vstupní text lékařské zprávy.
 
     Returns:
@@ -395,11 +434,12 @@ def parse_condition_data(text: str) -> dict:
     # print(f"DEBUG [FHIR Mapper]: Parsed condition data: {condition_data}")
     return condition_data
 
-def parse_vital_signs_data(text: str) -> dict:
+def parse_vital_signs_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str) -> dict:
     """
     Parsování textu pro extrakci vitálních funkcí: pulz, teplota, výška a hmotnost.
 
     Args:
+        nlp_entities: Seznam NLP entit (aktuálně se nevyužívá v této funkci).
         text: Vstupní text lékařské zprávy.
 
     Returns:
@@ -819,9 +859,10 @@ def create_fhir_condition_resource(condition_data: dict, patient_reference_id: s
 
 # --- Hlavní mapovací funkce ---
 
-def map_text_to_fhir(text: str) -> list:
+def map_text_to_fhir(processed_input: Union[str, List[Dict[str, Any]]], original_text: Optional[str] = None) -> list:
     """
     Hlavní funkce pro mapování textu lékařské zprávy na seznam FHIR zdrojů.
+    Nyní přijímá buď přímo text, nebo výstup z NLP (seznam entit).
 
     Postupně parsuje a vytváří:
     1. Patient resource.
@@ -830,58 +871,106 @@ def map_text_to_fhir(text: str) -> list:
     4. Condition resource pro diagnózu.
 
     Args:
-        text: Vstupní text lékařské zprávy.
+        processed_input (Union[str, List[Dict[str, Any]]]): Buď přímo text lékařské zprávy,
+                                                              nebo seznam NLP entit.
+        original_text (Optional[str]): Původní nezpracovaný text, důležitý pro regex fallback,
+                                       pokud `processed_input` je seznam NLP entit.
 
     Returns:
         Seznam slovníků, kde každý slovník reprezentuje jeden FHIR resource.
-        Pokud vstupní text je prázdný nebo nelze vytvořit Patient resource,
-        může vrátit prázdný seznam nebo seznam s omezeným počtem zdrojů.
     """
-    if not text or not text.strip(): # Kontrola prázdného nebo "whitespace-only" textu
-        print("DEBUG [FHIR Mapper]: Vstupní text je prázdný nebo obsahuje pouze bílé znaky. Nebudou vytvořeny žádné FHIR zdroje.")
+    nlp_entities: Optional[List[Dict[str, Any]]] = None
+    text_to_parse_with_regex: str = ""
+    # Proměnná pro uchování původního textu s originální velikostí písmen, pokud je k dispozici
+    raw_text_for_nlp_fallback: Optional[str] = original_text
+
+    if isinstance(processed_input, list):
+        nlp_entities = processed_input
+        if original_text:
+            text_to_parse_with_regex = original_text # Pro regex fallback použijeme originální text
+        else:
+            # Fallback, pokud original_text není k dispozici - méně ideální
+            print("VAROVÁNÍ [FHIR Mapper]: NLP entity byly poskytnuty, ale chybí original_text. Regex fallback může být méně spolehlivý.")
+            # Zde je důležité, aby text_to_parse_with_regex měl zachovanou velikost písmen, pokud možno.
+            # Regexy jsou většinou IGNORECASE, ale kontext může být důležitý.
+            # Spojení textů entit není dobrý nápad, protože regexy očekávají souvislý text.
+            # Pokud original_text není, regex fallback na celý text nebude možný.
+            # Můžeme nastavit text_to_parse_with_regex na prázdný string, aby regexy nic nenašly,
+            # nebo se pokusit použít text z první entity, což je ale velmi hrubé.
+            # Pro tuto fázi, pokud original_text chybí, regex fallbacky budou v podstatě vypnuty pro NLP cestu.
+            text_to_parse_with_regex = " " # Nastavíme na něco, co pravděpodobně regexy nenajdou
+            if nlp_entities: # Pokud máme alespoň nějaké entity, zkusíme z nich poskládat text
+                 # Toto je stále problematické, protože start_char a end_char se vztahují k původnímu textu
+                 # Prozatím to necháme takto s varováním.
+                 pass # text_to_parse_with_regex zůstane prázdný nebo se použije níže.
+    elif isinstance(processed_input, str):
+        text_to_parse_with_regex = processed_input # Toto je již normalizovaný text z text_extractor
+        raw_text_for_nlp_fallback = processed_input # Pro konzistenci, i když NLP se zde nepoužilo
+    else:
+        print(f"CHYBA [FHIR Mapper]: Neočekávaný typ vstupních dat: {type(processed_input)}. Očekáván str nebo List[Dict].")
         return []
+
+    # Pokud je text_to_parse_with_regex stále prázdný a máme NLP entity, a original_text nebyl dodán
+    # (což by znamenalo, že regex fallbacky nemají na čem pracovat),
+    # je to problém v logice volání. Prozatím pokračujeme.
+    # Vstup 'text' pro parsovací funkce bude nyní 'text_to_parse_with_regex' nebo 'raw_text_for_nlp_fallback'
+    # v závislosti na tom, zda chceme regexům dávat text s původní velikostí písmen nebo normalizovaný.
+    # Pro regexy, které jsou většinou IGNORECASE, by normalizovaný text měl být v pořádku.
+    # Ale pro konzistenci a případné case-sensitive části regexů (i když by neměly být),
+    # je lepší použít text, který nejvíce odpovídá tomu, na co byly regexy původně psány.
+    # Pokud máme NLP entity, `original_text` by měl být k dispozici.
+    # Pokud máme jen `processed_input` jako string, ten je již normalizovaný (např. lowercase).
+    # Použijeme `text_to_parse_with_regex`, který je buď `original_text` (z NLP cesty)
+    # nebo `processed_input` (z non-NLP cesty, již normalizovaný).
+
+    if not text_to_parse_with_regex and nlp_entities and not original_text:
+        # Toto je stav, kdy nemáme text pro regexy.
+        # Můžeme zkusit vytvořit text z entit, ale je to nouzovka.
+        # Pro jednoduchost, parsovací funkce dostanou prázdný text, pokud selže vše ostatní.
+        print("KRITICKÉ VAROVÁNÍ [FHIR Mapper]: Chybí textový vstup pro regexy, NLP nemusí pokrýt vše.")
+        # text_for_regex_parsers = " " # Aby regexy nic nenašly
+    # else:
+    text_for_regex_parsers = text_to_parse_with_regex # Toto bude text pro regexové parsery
+
+
+    if not text_for_regex_parsers or not text_for_regex_parsers.strip():
+        if not nlp_entities: # Pokud nemáme ani text, ani NLP entity, pak opravdu není co zpracovat
+            print("DEBUG [FHIR Mapper]: Vstupní text i NLP entity jsou prázdné. Nebudou vytvořeny žádné FHIR zdroje.")
+            return []
+        # Pokud máme NLP entity, ale text_for_regex_parsers je prázdný (např. chyběl original_text),
+        # stále můžeme zkusit vytvořit pacienta jen z NLP. Regex parsery dostanou prázdný text.
+        print("DEBUG [FHIR Mapper]: Vstupní text pro regexy je prázdný, ale NLP entity jsou k dispozici. Pokračuje se zpracováním.")
+
 
     fhir_resources = []
     patient_ref_id = None # Bude nastaveno po úspěšném vytvoření Patient resource
 
     # 1. Parsovat a vytvořit pacienta
-    # Je důležité mít data pacienta jako první, protože ostatní zdroje na něj referencují.
-    extracted_patient_data = parse_patient_data(text)
-    # I když je slovník extracted_patient_data prázdný, funkce parse_patient_data ho vrátí.
-    # create_fhir_patient_resource si poradí s případným nedostatkem klíčů.
+    extracted_patient_data = parse_patient_data(nlp_entities, text_for_regex_parsers)
     patient_resource = create_fhir_patient_resource(extracted_patient_data)
     if patient_resource:
         fhir_resources.append(patient_resource)
-        patient_ref_id = f"Patient/{patient_resource['id']}" # Vytvoření reference pro další zdroje
+        patient_ref_id = f"Patient/{patient_resource['id']}"
         print(f"INFO [FHIR Mapper]: Patient resource úspěšně vytvořen (ID: {patient_resource['id']}).")
     else:
-        # Pokud se nepodařilo vytvořit pacienta, nemá smysl pokračovat s dalšími zdroji,
-        # které na něj musí referencovat.
-        print("INFO [FHIR Mapper]: Patient resource nemohl být vytvořen (nedostatek dat nebo chyba). Další navázané FHIR zdroje nebudou generovány.")
-        return fhir_resources # Vrátí prázdný list, pokud pacient nebyl vytvořen.
+        print("INFO [FHIR Mapper]: Patient resource nemohl být vytvořen. Další navázané FHIR zdroje nebudou generovány.")
+        return fhir_resources
 
     # 2. Parsovat a vytvořit Observation pro krevní tlak
-    # Poznámka: parse_observation_data aktuálně obsahuje jen krevní tlak.
-    # Pokud by parsovala více věcí, bylo by lepší ji rozdělit nebo přejmenovat na např. parse_blood_pressure_data.
-    extracted_bp_data = parse_observation_data(text) # Tato funkce se zaměřuje na TK
-    if extracted_bp_data.get("blood_pressure_value"): # Kontrola, zda byla hodnota TK nalezena
+    extracted_bp_data = parse_observation_data(nlp_entities, text_for_regex_parsers)
+    if extracted_bp_data.get("blood_pressure_value"):
         observation_bp_resource = create_fhir_observation_bp_resource(extracted_bp_data, patient_ref_id)
         if observation_bp_resource:
             fhir_resources.append(observation_bp_resource)
             print(f"INFO [FHIR Mapper]: Observation (BP) resource úspěšně vytvořen (ID: {observation_bp_resource['id']}).")
 
-
-    # 3. Parsovat a vytvořit Observations pro další vitální funkce (pulz, teplota)
-    vital_signs_data = parse_vital_signs_data(text)
-    # Není třeba kontrolovat `if vital_signs_data:`, protože funkce vždy vrací slovník.
-    # Kontrolujeme přítomnost specifických klíčů níže.
-
+    # 3. Parsovat a vytvořit Observations pro další vitální funkce
+    vital_signs_data = parse_vital_signs_data(nlp_entities, text_for_regex_parsers)
     if vital_signs_data.get("pulse_value"):
         pulse_resource = create_fhir_observation_pulse_resource(vital_signs_data, patient_ref_id)
         if pulse_resource:
             fhir_resources.append(pulse_resource)
             print(f"INFO [FHIR Mapper]: Observation (Pulz) resource úspěšně vytvořen (ID: {pulse_resource['id']}).")
-
 
     if vital_signs_data.get("temperature_value"):
         temperature_resource = create_fhir_observation_temperature_resource(vital_signs_data, patient_ref_id)
@@ -902,19 +991,15 @@ def map_text_to_fhir(text: str) -> list:
             print(f"INFO [FHIR Mapper]: Observation (Hmotnost) resource úspěšně vytvořen (ID: {weight_resource['id']}).")
 
     # 4. Parsovat a vytvořit Condition pro diagnózu
-    extracted_condition_data = parse_condition_data(text)
-    if extracted_condition_data.get("diagnosis_text"): # Kontrola, zda byl text diagnózy nalezen
+    extracted_condition_data = parse_condition_data(nlp_entities, text_for_regex_parsers)
+    if extracted_condition_data.get("diagnosis_text"):
         condition_resource = create_fhir_condition_resource(extracted_condition_data, patient_ref_id)
         if condition_resource:
             fhir_resources.append(condition_resource)
             print(f"INFO [FHIR Mapper]: Condition (Diagnóza) resource úspěšně vytvořen (ID: {condition_resource['id']}).")
 
-
     if not fhir_resources:
-        print("DEBUG [FHIR Mapper]: Nebyly vytvořeny žádné FHIR zdroje z daného textu (ani Patient).")
-    # Následující log je spíše pro interní kontrolu konzistence, pokud by došlo k chybě v logice výše.
-    # elif len(fhir_resources) == 1 and fhir_resources[0]["resourceType"] == "Patient" and not patient_ref_id:
-    #     print("DEBUG [FHIR Mapper]: Byl vytvořen pouze Patient resource, ale chybí patient_ref_id pro další zdroje. Toto by nemělo nastat.")
+        print("DEBUG [FHIR Mapper]: Nebyly vytvořeny žádné FHIR zdroje.")
 
     print(f"INFO [FHIR Mapper]: Celkem vytvořeno {len(fhir_resources)} FHIR zdrojů.")
     return fhir_resources
@@ -1098,16 +1183,27 @@ if __name__ == '__main__':
         "Zpráva s výškou a hmotností (jedna řádka, zkratky)": sample_text_height_weight_4,
     }
 
-    for test_name, sample_text_or_date_string in test_texts.items():
+    for test_name, sample_text_or_data in test_texts.items():
         print(f"\n--- Testovací případ: {test_name} ---")
 
         # Rozlišení, zda je vstupem celý text zprávy nebo jen řetězec data pro parse_date_to_fhir_format
-        if "Pacient:" in sample_text_or_date_string or "TK:" in sample_text_or_date_string or not re.match(r"^\d{4}[\.\/\-]", sample_text_or_date_string.split("\n")[-1].replace("Nar.: ","").strip()):
+        # Pro testování nové funkce map_text_to_fhir budeme vždy předávat text.
+        # Testování s NLP entitami by vyžadovalo mockované NLP výstupy.
+
+        current_input_text = ""
+        if isinstance(sample_text_or_data, str):
+            current_input_text = sample_text_or_data
+        elif isinstance(sample_text_or_data, dict) and "text" in sample_text_or_data: # Pro budoucí testy s NLP
+            current_input_text = sample_text_or_data["text"]
+            # nlp_input = sample_text_or_data["nlp_entities"] # TODO pro testování NLP větve
+
+        if "Pacient:" in current_input_text or "TK:" in current_input_text or "Závěr:" in current_input_text or "Jméno pacienta:" in current_input_text or "Vyšetřovaný:" in current_input_text:
             # Jedná se o komplexní text zprávy
-            print(f"Vstupní text (komplexní zpráva):\n{sample_text_or_date_string}\n")
-            fhir_result_list = map_text_to_fhir(sample_text_or_date_string)
+            print(f"Vstupní text (komplexní zpráva):\n{current_input_text}\n")
+            # Voláme s `processed_input` jako textem a `original_text` také jako textem (pro simulaci non-NLP cesty s možností fallbacku)
+            fhir_result_list = map_text_to_fhir(current_input_text, original_text=current_input_text)
         else:
-            # Jedná se o přímý test funkce parse_date_to_fhir_format
+            # Jedná se o přímý test funkce parse_date_to_fhir_format (ponecháno pro ladění parse_date_to_fhir_format)
             # V tomto případě `sample_text_or_date_string` je samotný date string (poslední řádek po "Nar.: ")
             # nebo je to přímo date string, pokud neobsahuje "Pacient:" atd.
             date_to_test = sample_text_or_date_string

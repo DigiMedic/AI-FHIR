@@ -49,18 +49,32 @@ async def process_document_endpoint(file: UploadFile = File(...)):
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        extracted_text = None
+        extracted_data_for_fhir: Any = None # Může být str nebo List[Dict]
+        original_text_for_fhir: str = "" # Vždy text, pokud je k dispozici
+
         file_content_type = file.content_type
         print(f"DEBUG: Nahraný soubor: {file.filename}, Typ: {file_content_type}, Uložen do: {temp_file_path}")
 
         if file_content_type == "text/plain":
             with open(temp_file_path, "r", encoding="utf-8", errors="replace") as f:
                 text_content = f.read()
-            extracted_text = extract_text_from_document(text_content, input_type="text")
-            print(f"DEBUG: Extrakce z textového souboru (prvních 100 znaků): '{extracted_text[:100]}...' ")
+            original_text_for_fhir = text_content
+            # Pro textové soubory použijeme NLP extrakci
+            extracted_data_for_fhir = extract_text_from_document(text_content, input_type="text", use_nlp=True)
+            # extracted_data_for_fhir zde bude List[Dict[str, Any]] pokud NLP uspěje,
+            # nebo string pokud NLP selhalo a vrátilo text (dle implementace text_extractor)
+            # nebo string pokud by NLP vyvolalo výjimku a my bychom to zde zachytili a spustili non-NLP (což teď neděláme explicitně zde)
+            if isinstance(extracted_data_for_fhir, list):
+                 print(f"DEBUG: Extrakce z textového souboru (NLP, {len(extracted_data_for_fhir)} entit): {str(extracted_data_for_fhir)[:200]}...")
+            else: # Měl by to být string v případě fallbacku uvnitř extract_text_from_document
+                 print(f"DEBUG: Extrakce z textového souboru (pravděpodobně non-NLP fallback, prvních 100 znaků): '{str(extracted_data_for_fhir)[:100]}...' ")
+
         elif file_content_type in ["image/png", "image/jpeg", "image/jpg"]:
-            extracted_text = extract_text_from_document(temp_file_path, input_type="image_path")
-            print(f"DEBUG: Extrakce z obrázku (OCR) (prvních 100 znaků): '{extracted_text[:100]}...' ")
+            # Pro obrázky zatím NLP nepoužíváme přímo v tomto kroku, text_extractor vrací string
+            ocr_extracted_text = extract_text_from_document(temp_file_path, input_type="image_path")
+            extracted_data_for_fhir = ocr_extracted_text
+            original_text_for_fhir = ocr_extracted_text # Pro OCR je extrahovaný text zároveň "původním" pro mappovací účely
+            print(f"DEBUG: Extrakce z obrázku (OCR) (prvních 100 znaků): '{ocr_extracted_text[:100]}...' ")
         else:
             if os.path.exists(temp_file_path): # Smazat soubor pokud je nepodporovaný typ
                 os.remove(temp_file_path)
@@ -69,17 +83,36 @@ async def process_document_endpoint(file: UploadFile = File(...)):
                 detail=f"Nepodporovaný typ souboru: {file_content_type}. Použijte .txt, .png, .jpg, .jpeg."
             )
 
-        if extracted_text is None or not extracted_text.strip() or extracted_text.startswith("[CHYBA OCR]"):
-            error_detail = "Nepodařilo se extrahovat relevantní text z dokumentu."
-            if extracted_text and extracted_text.startswith("[CHYBA OCR]"):
-                error_detail = extracted_text
-            print(f"INFO: {error_detail} pro soubor {file.filename}")
+        # Kontrola výsledku extrakce
+        # Pro NLP (list) - prázdný list je validní výstup (žádné entity), ale map_text_to_fhir by měl zvládnout.
+        # Pro text (str) - None, prázdný string, nebo chybová hláška.
+        should_return_empty = False
+        if extracted_data_for_fhir is None:
+            should_return_empty = True
+            print(f"INFO: Extrakce dat vrátila None pro soubor {file.filename}.")
+        elif isinstance(extracted_data_for_fhir, str):
+            if not extracted_data_for_fhir.strip() or extracted_data_for_fhir.startswith("[CHYBA OCR]"):
+                error_detail = "Nepodařilo se extrahovat relevantní text z dokumentu."
+                if extracted_data_for_fhir.startswith("[CHYBA OCR]"):
+                    error_detail = extracted_data_for_fhir
+                print(f"INFO: {error_detail} pro soubor {file.filename}")
+                should_return_empty = True
+        # Pokud je extracted_data_for_fhir list (z NLP), nepovažujeme prázdný list za chybu zde,
+        # fhir_mapper by měl být schopen zpracovat prázdný list entit (a vrátit pak také prázdný seznam zdrojů).
+
+        if should_return_empty:
             return []
 
-        print(f"DEBUG: Text pro FHIR mapování (prvních 200 znaků): {extracted_text[:200]}")
-        fhir_resources = map_text_to_fhir(extracted_text)
+        # Mapování na FHIR zdroje
+        # `original_text_for_fhir` je důležitý pro regex fallback v map_text_to_fhir,
+        # zejména když `extracted_data_for_fhir` je seznam NLP entit.
+        print(f"DEBUG: Data pro FHIR mapování (typ: {type(extracted_data_for_fhir)}): {str(extracted_data_for_fhir)[:200]}...")
+        print(f"DEBUG: Original_text pro FHIR mapování (prvních 200 znaků): {original_text_for_fhir[:200]}...")
+
+        fhir_resources = map_text_to_fhir(extracted_data_for_fhir, original_text=original_text_for_fhir)
+
         if not fhir_resources:
-             print(f"INFO: Funkce map_text_to_fhir vrátila prázdný seznam pro text z {file.filename}: {extracted_text[:100]}...")
+             print(f"INFO: Funkce map_text_to_fhir vrátila prázdný seznam pro data z {file.filename}.")
         return fhir_resources
 
     except HTTPException:
