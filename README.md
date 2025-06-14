@@ -19,10 +19,11 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 
 ### Klíčové funkce
 1. **Podpora více formátů**: Zpracování textových dokumentů, PDF a naskenovaných obrázků.
-2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu kombinujícího rozpoznávání pojmenovaných entit (NER) s modelem Stanza (pro češtinu) a pokročilých regulárních výrazů.
+2. **AI-poháněná extrakce**: Přesná extrakce dat pomocí hybridního přístupu: primárně využívá model Stanza (`cs_cnec`) pro rozpoznávání pojmenovaných entit (NER) jako jsou jména pacientů, data, diagnózy (např. typ 'DIS'). Pro specifické strukturované údaje (např. některé vitální funkce) a jako fallback jsou použity pokročilé regulární výrazy.
 3. **FHIR mapování**: Automatická konverze dat do FHIR zdrojů.
-4. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
-5. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
+4. **Pokročilá validace dat**: Integrované kontroly pro zajištění konzistence a správnosti dat, včetně porovnání údajů z rodného čísla s datem narození, kontroly fyziologických rozsahů pro měřené hodnoty a ověření časové platnosti záznamů.
+5. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
+6. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
 
 ### Technologický stack
 - **Frontend**: React.js s použitím shadcn/ui
@@ -76,18 +77,18 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 - [x] Rozšíření UI o vizualizaci strukturovaných dat (Patient, Observation - TK, pulz, teplota, výška, váha, Condition).
 
 ### Fáze 3: Vylepšení a optimalizace (Měsíce 5-6)
-- [ ] **Integrace NLP modelu pro extrakci entit:**
+- [x] **Integrace NLP modelu pro extrakci entit:**
     - [x] Výběr a testování předtrénovaného NLP modelu (vybrán `stanfordnlp/stanza-cs` s modelem `cs_cnec`, licence Apache 2.0).
-    - [x] Návrh hybridního přístupu (kombinace NLP a stávajících regexů) a jeho počáteční implementace pro klíčové entity (jméno pacienta, datum narození).
+    - [x] Návrh hybridního přístupu (kombinace NLP Stanza a regexů) a jeho implementace pro klíčové entity (jméno pacienta, datum narození, diagnózy). Základní NLP podpora pro číselné hodnoty vitálních funkcí s robustním regex fallbackem.
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
-- [ ] **Pokročilá validace a návrh korekce dat:**
-    - [ ] Rozšíření validace extrahovaných dat (např. RČ vs datum narození, fyziologické rozsahy).
-    - [ ] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI.
+- [x] **Pokročilá validace a návrh korekce dat:**
+    - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
+    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen).
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
     - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů.
-- [ ] **Formalizace testování a výkonnostní optimalizace:**
-    - [ ] Zavedení jednotkových a integračních testů pomocí testovacího frameworku (např. pytest pro backend, Jest/RTL pro frontend).
+- [x] **Formalizace testování a výkonnostní optimalizace:**
+    - [x] Základní sada jednotkových testů pro backend (logika extrakce a mapování, validace) implementována pomocí pytest.
     - [ ] Profilování a optimalizace kritických částí aplikace (OCR, FHIR mapování).
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)

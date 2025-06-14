@@ -2,7 +2,7 @@
 import re
 import json
 from typing import Union, List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import unicodedata # Potřebné pro odstranění diakritiky
 
@@ -180,10 +180,15 @@ def parse_date_to_fhir_format(date_str: str) -> str | None:
     # Standardizace oddělovačů a odstranění nadbytečných mezer/znaků.
     # Cílem je získat formát "DD.MM.YYYY".
     cleaned_date_str = temp_date_str.strip()
-    cleaned_date_str = re.sub(r'\s*[\.\/]\s*', '.', cleaned_date_str) # Nahradí mezery/lomítka tečkami
-    cleaned_date_str = cleaned_date_str.replace(' ', '.') # Nahradí zbylé mezery tečkami (např. "15. 05. 1980")
+    # Nahradí běžné oddělovače a sekvence mezer jednou tečkou
+    cleaned_date_str = re.sub(r'\s*[\.\/\s]\s*', '.', cleaned_date_str)
+    # Odstraní případné vícenásobné tečky vzniklé předchozím krokem
+    cleaned_date_str = re.sub(r'\.+', '.', cleaned_date_str)
     if cleaned_date_str.endswith('.'): # Odstraní tečku na konci, pokud existuje
         cleaned_date_str = cleaned_date_str[:-1]
+    if cleaned_date_str.startswith('.'): # Odstraní tečku na začátku, pokud existuje
+        cleaned_date_str = cleaned_date_str[1:]
+
 
     parts = cleaned_date_str.split('.')
     if len(parts) != 3:
@@ -230,34 +235,43 @@ def is_valid_birth_number(birth_number_str: str) -> bool:
     Returns:
         True pokud je RČ validní, jinak False.
     """
+def is_valid_birth_number(birth_number_str: str) -> bool:
     if not birth_number_str:
         return False
-    cleaned_rc = birth_number_str.replace("/", "")
-
-    if not (len(cleaned_rc) == 9 or len(cleaned_rc) == 10):
-        print(f"DEBUG [FHIR Mapper]: Neplatná délka RČ: {len(cleaned_rc)} pro '{birth_number_str}'. Musí být 9 nebo 10.")
-        return False
+    cleaned_rc = birth_number_str.replace("/", "").strip()
 
     if not cleaned_rc.isdigit():
-        print(f"DEBUG [FHIR Mapper]: RČ '{birth_number_str}' obsahuje nečíselné znaky.")
+        print(f"DEBUG [FHIR Mapper]: is_valid_birth_number: RČ '{birth_number_str}' obsahuje nečíselné znaky po očištění.")
         return False
 
-    # Pro RČ přidělovaná od 1. ledna 1954 (desetimístná) se kontroluje dělitelnost 11.
-    # RČ přidělovaná od 1.1.2004 již nemusí být dělitelná 11, ale pro zjednodušení
-    # tuto kontrolu zde ponecháváme pro starší RČ, kde platila.
-    # Pro devítimístná RČ (před 1954) tato kontrola obecně neplatí.
+    if not (len(cleaned_rc) == 9 or len(cleaned_rc) == 10):
+        print(f"DEBUG [FHIR Mapper]: is_valid_birth_number: Neplatná délka RČ: {len(cleaned_rc)} pro '{birth_number_str}'. Musí být 9 nebo 10.")
+        return False
+
+    extracted_info = extract_info_from_birth_number(cleaned_rc)
+    if not extracted_info:
+        # extract_info_from_birth_number již loguje detaily, zde jen obecná zpráva.
+        print(f"DEBUG [FHIR Mapper]: is_valid_birth_number: RČ '{birth_number_str}' neobsahuje validní datumové informace.")
+        return False
+
+    # Kontrola dělitelnosti 11 pro desetimístná RČ vydaná v letech 1954 až 2003 včetně.
+    # Tato kontrola se nevztahuje na RČ vydaná před 1954 (9místná) ani po 2003 (nový formát měsíců).
     if len(cleaned_rc) == 10:
-        year_prefix = int(cleaned_rc[:2])
-        # Kontrola dělitelnosti 11 pro RČ vydaná v roce 1954 a později.
-        # Pro RČ vydaná před rokem 1954 (první dvojčíslí < 54) se dělitelnost 11 typicky nekontrolovala
-        # nebo měla jiná pravidla, která zde pro zjednodušení neimplementujeme.
-        # Dále, RČ od 2004 nemusí být dělitelná 11.
-        # Tato podmínka je tedy zjednodušením pro běžná RČ z let 1954-2003.
-        if year_prefix >= 54 : # Zahrnuje roky 1954-1999 a 2054+ (což je v budoucnu)
-                               # a také roky 2004-2053 (kde už dělitelnost platit nemusí)
-                               # Pro jednoduchost zde kontrolujeme pro všechny 10-místné RČ s rokem >= 54
-            if int(cleaned_rc) % 11 != 0:
-                print(f"DEBUG [FHIR Mapper]: RČ '{birth_number_str}' (10místné, rok >= 1954) není dělitelné 11.")
+        year_from_rc = extracted_info['year']
+
+        original_month_in_rc = int(cleaned_rc[2:4])
+        is_post_2003_format_check = False
+        if (original_month_in_rc >= 21 and original_month_in_rc <= 32) or \
+           (original_month_in_rc >= 71 and original_month_in_rc <= 82):
+            is_post_2003_format_check = True
+
+        if 1954 <= year_from_rc <= 2003 and not is_post_2003_format_check:
+            # print(f"DEBUG PRE-INT CONVERSION: cleaned_rc='{cleaned_rc}', type={type(cleaned_rc)}") # Temporary debug
+            rc_as_int = int(cleaned_rc)
+            modulo_result = rc_as_int % 11
+            # print(f"DEBUG MODULO CHECK: RC_INT={rc_as_int}, MODULO_RESULT={modulo_result}") # Temporary debug print
+            if modulo_result != 0:
+                print(f"DEBUG [FHIR Mapper]: is_valid_birth_number: RČ '{birth_number_str}' (rok {year_from_rc}, formát do 2003) není dělitelné 11 (mod={modulo_result}).")
                 return False
     return True
 
@@ -269,6 +283,105 @@ def generate_fhir_id() -> str:
         Řetězec reprezentující UUID.
     """
     return str(uuid.uuid4())
+
+def extract_info_from_birth_number(birth_number_str: str) -> Optional[Dict[str, Any]]:
+    """
+    Extrahuje rok, měsíc, den a pohlaví z českého rodného čísla.
+    Args:
+        birth_number_str: Řetězec rodného čísla (očekává se již očištěný, tj. pouze číslice).
+    Returns:
+        Slovník s klíči 'year', 'month', 'day', 'gender_code' ('male'/'female'/'unknown'),
+        nebo None pokud extrakce selže nebo je RČ nekonzistentní.
+    """
+    if not (len(birth_number_str) == 9 or len(birth_number_str) == 10):
+        # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: Neplatná délka RČ: {len(birth_number_str)}.")
+        return None
+    if not birth_number_str.isdigit():
+        # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: RČ '{birth_number_str}' obsahuje nečíselné znaky.")
+        return None
+
+    try:
+        year_short = int(birth_number_str[0:2])
+        month_raw = int(birth_number_str[2:4])
+        day_raw = int(birth_number_str[4:6])
+
+        # Určení století a roku
+        # Pravidla pro určení století:
+        # Pro RČ do roku 1985 včetně: YYMMDDXXX (9 číslic) nebo YYMMDDXXXX (10 číslic, od 1954)
+        #   - Rok 19xx
+        # Pro RČ od roku 1986: YYMMDDXXXX (10 číslic)
+        #   - Rok 19xx nebo 20xx. Pokud YY < 54 (pro RČ vydaná do 2003) => 20YY, jinak 19YY.
+        #   - Pro RČ vydaná od 2004: měsíc +20 (muži) nebo +70 (ženy), rok je vždy 20YY.
+        # Toto je komplexní, pro zjednodušení se zde zaměříme na základní logiku.
+
+        year_full = 0
+        if len(birth_number_str) == 9: # Před 1954
+            year_full = 1900 + year_short
+            # Kontrola, zda rok není příliš nízký (např. 1880, pokud je to relevantní hranice)
+            if year_full < 1880: # Arbitrary lower bound for sanity
+                 # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: Rok {year_full} z 9místného RČ je příliš nízký.")
+                 return None
+
+        elif len(birth_number_str) == 10:
+            # Pro RČ od 1.1.2004 se k měsíci přidává +20 (muži) nebo +70 (ženy)
+            # a rok je vždy 20xx. Tato RČ mají také neměnnou třetí číslici za lomítkem (index 6) > 1.
+            # Pro RČ vydaná 1954-2003:
+            #   Pokud YYMMDD/XXXX, rok < 54 => 20YY, jinak 19YY
+            # Toto rozlišení je klíčové. Třetí číslice za lomítkem (birth_number_str[6]) může pomoci.
+            # Pokud je birth_number_str[6] např. '0' nebo '1', jde pravděpodobně o RČ formátu do r.2003.
+            # Pokud je '2' a výše, jde o RČ po r.2003.
+
+            is_post_2003_format = False
+            # Kontrola, zda formát měsíce odpovídá post-2003 pravidlům
+            if (21 <= month_raw <= 32) or (71 <= month_raw <= 82):
+                 is_post_2003_format = True
+
+            if is_post_2003_format:
+                year_full = 2000 + year_short
+            else: # Formát RČ do roku 2003 (nebo 9místné, kde je rok vždy 19xx)
+                  # Pro 10místné RČ vydané do r. 2003: rok < 54 znamená 20xx, jinak 19xx.
+                  # Toto pravidlo se aplikuje na datum narození osoby, ne na rok vydání RČ.
+                if year_short < 54 :
+                    year_full = 2000 + year_short
+                else: # 54-99 -> 1954-1999
+                    year_full = 1900 + year_short
+
+        # Extrakce měsíce a pohlaví
+        month = month_raw
+        gender_code = "unknown"
+
+        if 51 <= month_raw <= 62: # Žena (starý formát, nebo nový pokud rok > 2003 a měsíc není +70)
+            month = month_raw - 50
+            gender_code = "female"
+        elif 71 <= month_raw <= 82 and year_full >= 2004: # Žena, RČ od 2004
+            month = month_raw - 70
+            gender_code = "female"
+        elif 21 <= month_raw <= 32 and year_full >= 2004: # Muž, RČ od 2004
+            month = month_raw - 20
+            gender_code = "male"
+        elif 1 <= month_raw <= 12: # Muž (starý formát)
+            gender_code = "male"
+        else:
+            # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: Neplatný kód měsíce v RČ: {month_raw}.")
+            return None
+
+        # Validace dne
+        if not (1 <= day_raw <= 31):
+            # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: Neplatný den v RČ: {day_raw}.")
+            return None
+
+        try:
+            datetime(year_full, month, day_raw)
+        except ValueError:
+            # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: Neplatná kombinace den/měsíc/rok v RČ: {day_raw}/{month}/{year_full}.")
+            return None
+
+        return {'year': year_full, 'month': month, 'day': day_raw, 'gender_code': gender_code}
+
+    except ValueError:
+        # print(f"DEBUG [FHIR Mapper]: extract_info_from_birth_number: RČ '{birth_number_str}' obsahuje nečíselné znaky v date části.")
+        return None
+
 
 # --- Funkce pro parsování specifických dat z textu ---
 
@@ -391,15 +504,50 @@ def parse_observation_data(nlp_entities: Optional[List[Dict[str, Any]]], text: s
         - "measurement_time_fhir": Čas měření ve FHIR formátu (ISO).
     """
     observation_data = {} # Inicializace prázdného slovníku
+    found_bp_by_nlp = False
 
     # Extrakce krevního tlaku
     bp_match = re.search(REGEX_BLOOD_PRESSURE, text, re.IGNORECASE)
     if bp_match:
-        # Odstranění mezer z hodnoty TK, např. "120 / 80" -> "120/80"
-        observation_data["blood_pressure_value"] = bp_match.group(1).replace(" ", "")
+        bp_text_regex_capture = bp_match.group(1) # Text zachycený regexem, např. "120 / 80"
+        bp_value_from_regex = bp_text_regex_capture.replace(" ", "") # "120/80"
+
+        if nlp_entities:
+            # Pokus o nalezení dvou číselných entit v blízkosti klíčového slova TK nebo v rámci textu zachyceného regexem
+            # Toto je zjednodušený přístup: hledáme čísla v textu, který regex již označil za hodnotu TK.
+            # Získání pozic regex shody v původním textu.
+            regex_match_start, regex_match_end = bp_match.start(1), bp_match.end(1)
+
+            # Filtrujeme relevantní NLP entity (čísla) v rozsahu regex shody
+            relevant_nlp_entities = [
+                ent for ent in nlp_entities
+                if ent.get('type') in ['CARDINAL', 'NUMBER'] and # TODO: Ověřit typy entit pro čísla
+                   ent['start_char'] >= regex_match_start and ent['end_char'] <= regex_match_end
+            ]
+            relevant_nlp_entities.sort(key=lambda x: x['start_char'])
+
+            if len(relevant_nlp_entities) >= 2:
+                # Máme alespoň dvě čísla, pokusíme se je interpretovat jako systolický/diastolický
+                # Předpokládáme, že jsou v pořadí systolický, pak diastolický.
+                systolic_nlp_text = relevant_nlp_entities[0]['text']
+                diastolic_nlp_text = relevant_nlp_entities[1]['text']
+
+                # Základní validace, zda texty vypadají jako čísla
+                if systolic_nlp_text.replace('.','',1).isdigit() and diastolic_nlp_text.replace('.','',1).isdigit():
+                    # Odstraníme případné mezery a spojíme lomítkem
+                    bp_value_nlp = f"{systolic_nlp_text.strip()}/{diastolic_nlp_text.strip()}"
+                    observation_data["blood_pressure_value"] = bp_value_nlp
+                    found_bp_by_nlp = True
+                    print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak (NLP): {bp_value_nlp} (Systole: '{systolic_nlp_text}', Diastole: '{diastolic_nlp_text}')")
+
+        if not found_bp_by_nlp:
+            observation_data["blood_pressure_value"] = bp_value_from_regex
+            print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak (Regex fallback): {observation_data['blood_pressure_value']}")
+
         # Předpokládáme aktuální čas měření, pokud není specifikován jinak
         observation_data["measurement_time_fhir"] = datetime.now().isoformat()
-        print(f"DEBUG [FHIR Mapper]: Nalezen krevní tlak: {observation_data['blood_pressure_value']}")
+    else:
+        print(f"DEBUG [FHIR Mapper]: Krevní tlak nenalezen pomocí Regex.")
 
     # Pokud by funkce parsovala více typů pozorování, log by byl zde obecnější.
     # print(f"DEBUG [FHIR Mapper]: Parsed specific observation data: {observation_data}")
@@ -419,17 +567,44 @@ def parse_condition_data(nlp_entities: Optional[List[Dict[str, Any]]], text: str
         - "onset_date_time_fhir": Předpokládaný čas stanovení diagnózy (aktuální čas).
     """
     condition_data = {} # Inicializace prázdného slovníku
+    found_diagnosis_by_nlp = False
+    diagnosis_text_raw_nlp = None
 
-    # Extrakce textu diagnózy
-    # re.DOTALL umožňuje tečce (.) zachytit i znaky nového řádku, což je pro víceřádkové diagnózy důležité.
-    diagnosis_match = re.search(REGEX_DIAGNOSIS_TEXT, text, re.IGNORECASE | re.DOTALL)
-    if diagnosis_match:
-        diagnosis_text_raw = diagnosis_match.group(1).strip()
-        # Odstranění běžných interpunkčních znamének na konci textu diagnózy pro čistší data.
-        condition_data["diagnosis_text"] = re.sub(r'[\.,;]$', '', diagnosis_text_raw).strip()
-        # Předpokládáme, že diagnóza byla zaznamenána v aktuálním čase.
-        condition_data["onset_date_time_fhir"] = datetime.now().isoformat()
-        print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza: '{condition_data['diagnosis_text']}' (Raw: '{diagnosis_text_raw}')")
+    if nlp_entities:
+        # Hledání entit typu 'DIS' (nebo podobného pro diagnózy)
+        # Předpokládáme, že 'DIS' je typ pro diagnózu/onemocnění v cs_cnec modelu
+        # Další možné typy by mohly být 'DIAG', 'PROBLEM', atd. Nutno ověřit s výstupem modelu.
+        dis_entities = [ent for ent in nlp_entities if ent.get('type') == 'DIS'] # TODO: Ověřit typ entity pro diagnózy
+
+        if dis_entities:
+            # Výběr nejlepší entity - např. první nebo nejdelší
+            # Prozatím vezmeme první nalezenou
+            selected_entity = dis_entities[0] # Jednoduchý výběr první entity
+            # Alternativa: výběr nejdelší entity
+            # selected_entity = max(dis_entities, key=lambda ent: len(ent['text']))
+
+            diagnosis_text_raw_nlp = selected_entity['text'].strip()
+            condition_data["diagnosis_text"] = re.sub(r'[\.,;]$', '', diagnosis_text_raw_nlp).strip()
+            condition_data["onset_date_time_fhir"] = datetime.now().isoformat() # Předpokládaný čas
+            found_diagnosis_by_nlp = True
+            print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza (NLP typ DIS): '{condition_data['diagnosis_text']}' (Raw NLP: '{diagnosis_text_raw_nlp}')")
+
+    # Fallback na Regex, pokud NLP nenašlo diagnózu nebo nebyly poskytnuty NLP entity
+    if not found_diagnosis_by_nlp and text:
+        # re.DOTALL umožňuje tečce (.) zachytit i znaky nového řádku, což je pro víceřádkové diagnózy důležité.
+        diagnosis_match = re.search(REGEX_DIAGNOSIS_TEXT, text, re.IGNORECASE | re.DOTALL)
+        if diagnosis_match:
+            diagnosis_text_raw_regex = diagnosis_match.group(1).strip()
+            # Odstranění běžných interpunkčních znamének na konci textu diagnózy pro čistší data.
+            condition_data["diagnosis_text"] = re.sub(r'[\.,;]$', '', diagnosis_text_raw_regex).strip()
+            # Předpokládáme, že diagnóza byla zaznamenána v aktuálním čase.
+            condition_data["onset_date_time_fhir"] = datetime.now().isoformat()
+            print(f"DEBUG [FHIR Mapper]: Nalezena diagnóza (Regex fallback): '{condition_data['diagnosis_text']}' (Raw Regex: '{diagnosis_text_raw_regex}')")
+        else:
+            print(f"DEBUG [FHIR Mapper]: Diagnóza nenalezena ani pomocí NLP, ani pomocí Regex.")
+    elif not text and not found_diagnosis_by_nlp:
+        print(f"DEBUG [FHIR Mapper]: Diagnóza nenalezena (NLP neaktivní/neúspěšné a chybí text pro Regex).")
+
 
     # print(f"DEBUG [FHIR Mapper]: Parsed condition data: {condition_data}")
     return condition_data
@@ -535,30 +710,54 @@ def create_fhir_patient_resource(patient_data: dict) -> dict | None:
     elif len(all_name_parts) == 1: # Pokud je jen jedno slovo, předpokládáme, že je to příjmení
         resource["name"][0]["family"] = all_name_parts[0]
 
-    # Přidání rodného čísla jako identifikátoru, pokud bylo nalezeno
+    # Zpracování rodného čísla, validace a porovnání s datem narození
+    rc_info = None
     if "birth_number_raw" in patient_data:
-        raw_rc = patient_data["birth_number_raw"]
-        if is_valid_birth_number(raw_rc):
-            birth_number_cleaned = raw_rc.replace("/", "") # Odstranění případného lomítka
-            resource["identifier"] = [
-                {
-                    "use": "official", # Oficiální identifikátor
-                "type": { # Typ identifikátoru
-                    "coding": [
-                        { # Kódování typu
-                            "system": "http://terminology.hl7.org/CodeSystem/v2-0203", # Systém kódování
-                            "code": "NI", # National unique individual identifier
-                            "display": "National unique individual identifier"
-                        }
-                    ],
-                    "text": "Rodné číslo" # Český popis
-                },
-                "system": "urn:oid:1.2.203.17.4.1", # OID pro rodná čísla v ČR
-                    "value": birth_number_cleaned # Hodnota rodného čísla
-                }
-            ]
+        raw_rc_str = patient_data["birth_number_raw"]
+        cleaned_rc_str = raw_rc_str.replace("/", "").strip()
+        if is_valid_birth_number(raw_rc_str): # is_valid_birth_number interně volá extract_info_from_birth_number
+            rc_info = extract_info_from_birth_number(cleaned_rc_str) # Znovu voláme pro získání dat
+
+            if rc_info:
+                # Přidání RČ jako identifikátoru
+                resource["identifier"] = [
+                    {
+                        "use": "official",
+                        "type": {
+                            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/v2-0203", "code": "NI", "display": "National unique individual identifier"}],
+                            "text": "Rodné číslo"
+                        },
+                        "system": "urn:oid:1.2.203.17.4.1",
+                        "value": cleaned_rc_str
+                    }
+                ]
+
+                # Porovnání data z RČ s poskytnutým datem narození
+                if patient_data.get("birth_date_fhir"):
+                    try:
+                        # Parsování birth_date_fhir (YYYY-MM-DD) na komponenty
+                        fhir_date_obj = datetime.strptime(patient_data["birth_date_fhir"], "%Y-%m-%d")
+                        fhir_year = fhir_date_obj.year
+                        fhir_month = fhir_date_obj.month
+                        fhir_day = fhir_date_obj.day
+
+                        if not (rc_info['year'] == fhir_year and \
+                                rc_info['month'] == fhir_month and \
+                                rc_info['day'] == fhir_day):
+                            print(f"VAROVÁNÍ [FHIR Mapper]: Nesoulad mezi datem narození z RČ ({rc_info['day']}.{rc_info['month']}.{rc_info['year']}) "
+                                  f"a zadaným datem narození ({patient_data['birth_date_fhir']}). RČ: '{raw_rc_str}'.")
+                    except ValueError:
+                        print(f"DEBUG [FHIR Mapper]: Chyba při parsování birth_date_fhir ('{patient_data['birth_date_fhir']}') pro porovnání s RČ.")
+
+                # Přidání pohlaví z RČ
+                if rc_info['gender_code'] != "unknown":
+                    resource["gender"] = rc_info['gender_code']
+                else: # Pokud RČ neumožňuje jednoznačné určení pohlaví (např. stará 9místná RČ)
+                    print(f"DEBUG [FHIR Mapper]: Pohlaví nebylo jednoznačně určeno z RČ '{raw_rc_str}'.")
+            else: # rc_info je None i po is_valid_birth_number (nemělo by nastat, pokud is_valid_birth_number prošlo)
+                 print(f"DEBUG [FHIR Mapper]: Nepodařilo se extrahovat informace z validního RČ '{raw_rc_str}' pro účely Patient resource.")
         else:
-            print(f"VAROVÁNÍ [FHIR Mapper]: Neplatný formát nebo kontrolní součet rodného čísla: '{raw_rc}'. RČ nebude přidáno do FHIR zdroje.")
+            print(f"VAROVÁNÍ [FHIR Mapper]: Neplatný formát nebo kontrolní součet rodného čísla: '{raw_rc_str}'. RČ nebude přidáno do FHIR zdroje.")
 
     print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Patient resource (ID: {resource_id}).")
     return resource
@@ -585,11 +784,14 @@ def create_fhir_observation_bp_resource(observation_data: dict, patient_referenc
         systolic = int(systolic_str.strip())
         diastolic = int(diastolic_str.strip())
 
-        # Validace rozsahu hodnot
-        if not (50 <= systolic <= 300):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Systolický tlak {systolic} je mimo očekávaný rozsah (50-300 mmHg).")
-        if not (30 <= diastolic <= 200):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Diastolický tlak {diastolic} je mimo očekávaný rozsah (30-200 mmHg).")
+        # Standardizované rozsahy a logování
+        systolic_min, systolic_max = 50, 300
+        diastolic_min, diastolic_max = 30, 200
+
+        if not (systolic_min <= systolic <= systolic_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Systolický krevní tlak ({systolic} mmHg) je mimo očekávaný fyziologický rozsah ({systolic_min}-{systolic_max} mmHg).")
+        if not (diastolic_min <= diastolic <= diastolic_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Diastolický krevní tlak ({diastolic} mmHg) je mimo očekávaný fyziologický rozsah ({diastolic_min}-{diastolic_max} mmHg).")
 
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatný formát hodnoty krevního tlaku: '{observation_data['blood_pressure_value']}'. Nelze rozdělit nebo převést na int.")
@@ -609,6 +811,7 @@ def create_fhir_observation_bp_resource(observation_data: dict, patient_referenc
             "text": "Krevní tlak"
         },
         "subject": {"reference": patient_reference_id}, # Reference na pacienta
+        # TODO: Validovat effectiveDateTime proti datu narození pacienta, pokud je dostupné.
         "effectiveDateTime": observation_data.get("measurement_time_fhir", current_time_iso), # Čas měření
         "component": [ # Komponenty pro systolický a diastolický tlak
             {
@@ -641,11 +844,27 @@ def create_fhir_observation_pulse_resource(observation_data: dict, patient_refer
 
     resource_id = generate_fhir_id()
     current_time_iso = datetime.now().isoformat()
+    measurement_time_to_check = observation_data.get("measurement_time_fhir", current_time_iso) # measurement_time_fhir by mělo být z parse_observation_data
+
+    # Kontrola, zda čas měření není v daleké budoucnosti
+    try:
+        # Odebrání 'Z' pokud je přítomno, protože fromisoformat to nemusí vždy správně zpracovat s 'Z' v Pythonu < 3.11
+        if isinstance(measurement_time_to_check, str) and measurement_time_to_check.endswith('Z'):
+            dt_to_check = datetime.fromisoformat(measurement_time_to_check[:-1])
+        else:
+            dt_to_check = datetime.fromisoformat(str(measurement_time_to_check)) # Zajistíme, že je to string
+
+        if dt_to_check > datetime.now() + timedelta(days=1):
+            print(f"VAROVÁNÍ [FHIR Mapper]: effectiveDateTime pro Pulz ('{measurement_time_to_check}') je v daleké budoucnosti.")
+    except Exception as e:
+        print(f"DEBUG [FHIR Mapper]: Chyba při validaci effectiveDateTime pro Pulz ('{measurement_time_to_check}'): {e}")
+
 
     try:
         pulse_val = int(observation_data["pulse_value"])
-        if not (20 <= pulse_val <= 300):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota pulzu {pulse_val} je mimo očekávaný rozsah (20-300 tepů/min).")
+        pulse_min, pulse_max = 20, 300 # tepů/min
+        if not (pulse_min <= pulse_val <= pulse_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Pulz ({pulse_val} /min) je mimo očekávaný fyziologický rozsah ({pulse_min}-{pulse_max} /min).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota pulzu: '{observation_data['pulse_value']}'. Nelze převést na int.")
         return None
@@ -661,7 +880,8 @@ def create_fhir_observation_pulse_resource(observation_data: dict, patient_refer
             "text": "Pulz"
         },
         "subject": {"reference": patient_reference_id},
-        "effectiveDateTime": current_time_iso, # Čas záznamu
+        # TODO: Validovat effectiveDateTime proti datu narození pacienta, pokud je dostupné.
+        "effectiveDateTime": measurement_time_to_check,
         "valueQuantity": { # Hodnota pulzu
             "value": pulse_val,
             "unit": observation_data.get("pulse_unit", "/min"), # Jednotka (standardizovaná)
@@ -689,12 +909,22 @@ def create_fhir_observation_temperature_resource(observation_data: dict, patient
 
     resource_id = generate_fhir_id()
     current_time_iso = datetime.now().isoformat()
+    # Pro teplotu, výšku, váhu se measurement_time_fhir typicky nenastavuje v parse_vital_signs_data,
+    # takže zde použijeme current_time_iso jako základ pro kontrolu.
+    measurement_time_to_check = current_time_iso
+    try:
+        dt_to_check = datetime.fromisoformat(str(measurement_time_to_check).rstrip('Z'))
+        if dt_to_check > datetime.now() + timedelta(days=1):
+            print(f"VAROVÁNÍ [FHIR Mapper]: effectiveDateTime pro Teplotu ('{measurement_time_to_check}') je v daleké budoucnosti.")
+    except Exception as e:
+        print(f"DEBUG [FHIR Mapper]: Chyba při validaci effectiveDateTime pro Teplotu ('{measurement_time_to_check}'): {e}")
 
     try:
         # Hodnota teploty by měla být již normalizována na tečku jako desetinný oddělovač
         temp_val = float(observation_data["temperature_value"])
-        if not (30.0 <= temp_val <= 45.0):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota teploty {temp_val}°C je mimo očekávaný rozsah (30.0-45.0°C).")
+        temp_min, temp_max = 30.0, 45.0 # °C
+        if not (temp_min <= temp_val <= temp_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Tělesná teplota ({temp_val} °C) je mimo očekávaný fyziologický rozsah ({temp_min}-{temp_max} °C).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota teploty: '{observation_data['temperature_value']}'. Nelze převést na float.")
         return None
@@ -710,7 +940,8 @@ def create_fhir_observation_temperature_resource(observation_data: dict, patient
             "text": "Tělesná teplota"
         },
         "subject": {"reference": patient_reference_id},
-        "effectiveDateTime": current_time_iso, # Čas záznamu
+        # TODO: Validovat effectiveDateTime proti datu narození pacienta, pokud je dostupné.
+        "effectiveDateTime": measurement_time_to_check,
         "valueQuantity": { # Hodnota teploty
             "value": temp_val,
             "unit": observation_data.get("temperature_unit", "°C"), # Jednotka (standardizovaná)
@@ -738,11 +969,19 @@ def create_fhir_observation_height_resource(observation_data: dict, patient_refe
 
     resource_id = generate_fhir_id()
     current_time_iso = datetime.now().isoformat()
+    measurement_time_to_check = current_time_iso
+    try:
+        dt_to_check = datetime.fromisoformat(str(measurement_time_to_check).rstrip('Z'))
+        if dt_to_check > datetime.now() + timedelta(days=1):
+            print(f"VAROVÁNÍ [FHIR Mapper]: effectiveDateTime pro Výšku ('{measurement_time_to_check}') je v daleké budoucnosti.")
+    except Exception as e:
+        print(f"DEBUG [FHIR Mapper]: Chyba při validaci effectiveDateTime pro Výšku ('{measurement_time_to_check}'): {e}")
 
     try:
         height_val = float(observation_data["height_value"])
-        if not (40.0 <= height_val <= 250.0):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota výšky {height_val} cm je mimo očekávaný rozsah (40.0-250.0 cm).")
+        height_min, height_max = 40.0, 250.0 # cm
+        if not (height_min <= height_val <= height_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Tělesná výška ({height_val} cm) je mimo očekávaný fyziologický rozsah ({height_min}-{height_max} cm).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota výšky: '{observation_data['height_value']}'. Nelze převést na float.")
         return None
@@ -758,7 +997,8 @@ def create_fhir_observation_height_resource(observation_data: dict, patient_refe
             "text": "Tělesná výška"
         },
         "subject": {"reference": patient_reference_id},
-        "effectiveDateTime": current_time_iso, # Čas záznamu
+        # TODO: Validovat effectiveDateTime proti datu narození pacienta, pokud je dostupné.
+        "effectiveDateTime": measurement_time_to_check,
         "valueQuantity": { # Hodnota výšky
             "value": height_val,
             "unit": observation_data.get("height_unit", "cm"), # Jednotka (standardizovaná)
@@ -786,11 +1026,19 @@ def create_fhir_observation_weight_resource(observation_data: dict, patient_refe
 
     resource_id = generate_fhir_id()
     current_time_iso = datetime.now().isoformat()
+    measurement_time_to_check = current_time_iso
+    try:
+        dt_to_check = datetime.fromisoformat(str(measurement_time_to_check).rstrip('Z'))
+        if dt_to_check > datetime.now() + timedelta(days=1):
+            print(f"VAROVÁNÍ [FHIR Mapper]: effectiveDateTime pro Hmotnost ('{measurement_time_to_check}') je v daleké budoucnosti.")
+    except Exception as e:
+        print(f"DEBUG [FHIR Mapper]: Chyba při validaci effectiveDateTime pro Hmotnost ('{measurement_time_to_check}'): {e}")
 
     try:
         weight_val = float(observation_data["weight_value"])
-        if not (1.0 <= weight_val <= 300.0):
-            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota hmotnosti {weight_val} kg je mimo očekávaný rozsah (1.0-300.0 kg).")
+        weight_min, weight_max = 1.0, 300.0 # kg
+        if not (weight_min <= weight_val <= weight_max):
+            print(f"VAROVÁNÍ [FHIR Mapper]: Hodnota Tělesná hmotnost ({weight_val} kg) je mimo očekávaný fyziologický rozsah ({weight_min}-{weight_max} kg).")
     except ValueError:
         print(f"CHYBA [FHIR Mapper]: Neplatná hodnota hmotnosti: '{observation_data['weight_value']}'. Nelze převést na float.")
         return None
@@ -806,7 +1054,8 @@ def create_fhir_observation_weight_resource(observation_data: dict, patient_refe
             "text": "Tělesná hmotnost"
         },
         "subject": {"reference": patient_reference_id},
-        "effectiveDateTime": current_time_iso, # Čas záznamu
+        # TODO: Validovat effectiveDateTime proti datu narození pacienta, pokud je dostupné.
+        "effectiveDateTime": measurement_time_to_check,
         "valueQuantity": { # Hodnota hmotnosti
             "value": weight_val,
             "unit": observation_data.get("weight_unit", "kg"), # Jednotka (standardizovaná)
@@ -834,6 +1083,19 @@ def create_fhir_condition_resource(condition_data: dict, patient_reference_id: s
 
     resource_id = generate_fhir_id()
     current_time_iso = datetime.now().isoformat() # Čas záznamu diagnózy
+    recorded_date_to_check = condition_data.get("onset_date_time_fhir", current_time_iso)
+
+    try:
+        # Odebrání 'Z' pokud je přítomno
+        if isinstance(recorded_date_to_check, str) and recorded_date_to_check.endswith('Z'):
+            dt_to_check = datetime.fromisoformat(recorded_date_to_check[:-1])
+        else:
+            dt_to_check = datetime.fromisoformat(str(recorded_date_to_check))
+
+        if dt_to_check > datetime.now() + timedelta(days=1):
+            print(f"VAROVÁNÍ [FHIR Mapper]: recordedDate pro Condition ('{recorded_date_to_check}') je v daleké budoucnosti.")
+    except Exception as e:
+        print(f"DEBUG [FHIR Mapper]: Chyba při validaci recordedDate pro Condition ('{recorded_date_to_check}'): {e}")
 
     resource = {
         "resourceType": "Condition",
@@ -852,7 +1114,8 @@ def create_fhir_condition_resource(condition_data: dict, patient_reference_id: s
             "text": condition_data["diagnosis_text"]
         },
         "subject": {"reference": patient_reference_id}, # Reference na pacienta
-        "recordedDate": condition_data.get("onset_date_time_fhir", current_time_iso) # Datum záznamu
+        # TODO: Validovat recordedDate proti datu narození pacienta, pokud je dostupné.
+        "recordedDate": recorded_date_to_check
     }
     print(f"DEBUG [FHIR Mapper]: Vytvořen FHIR Condition (Diagnóza) resource (ID: {resource_id}).")
     return resource
