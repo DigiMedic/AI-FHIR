@@ -19,3 +19,10 @@ Thumbs.db
 # Dočasné soubory pro upload
 backend/temp_uploads/
 temp_uploads/
+
+# Environment configuration files
+# Ignore .env files in any directory, including the root
+.env
+# Specifically ignore .env files in backend and frontend directories
+backend/.env
+frontend/.env
