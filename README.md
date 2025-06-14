@@ -88,13 +88,13 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích). Backend nyní generuje strukturované "quality issues", které mohou sloužit jako základ pro tuto UI funkcionalitu.
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
-    - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend nyní poskytuje strukturované 'quality issues'.)
-- [x] **Formalizace testování a výkonnostní optimalizace:**
+    - [~] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend poskytuje strukturované 'quality issues', frontend nyní tyto problémy zobrazuje přehledněji).
+- [x]/[~] **Formalizace testování a výkonnostní optimalizace:** Implementována a rozšířena sada jednotkových a integračních testů pro backend. Přidány základní frontendové testy (React Testing Library) a backendový test pro zpracování obrázků.
     - [x] Implementována a rozšířena sada jednotkových a integračních testů pro backend (endpointy, logika extrakce a mapování, API klient) pomocí pytest.
     - [~] Provedeno základní profilování kritických částí aplikace (NLP extrakce, FHIR mapování) a identifikace potenciálních oblastí pro optimalizaci. Výkon je prozatím považován za akceptovatelný pro typické vstupy.
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
-- [ ] Komplexní testování komponenty
+- [~] Komplexní testování komponenty (základní frontendové a specifické backendové testy přidány).
 - [x] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí a automatickým odesíláním FHIR Bundlů z hlavního zpracovávacího endpointu. Propojení s frontendem pro řízení tohoto procesu a plná integrace s produkčním API je dalším krokem.
 - [ ] Tvorba uživatelské dokumentace
 - [ ] Příprava na nasazení

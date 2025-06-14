@@ -14,6 +14,7 @@ function App() {
   const [error, setError] = useState('');
   const [fhirOutput, setFhirOutput] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [qualityIssues, setQualityIssues] = useState([]);
 
 
   const handleFileChange = async (event) => {
@@ -21,6 +22,7 @@ function App() {
     setError('');
     setExtractedTextFromBackend('');
     setFhirOutput(null);
+    setQualityIssues([]); // Reset quality issues
     setSelectedFile(null);
 
     if (!file) {
@@ -55,47 +57,62 @@ function App() {
         throw new Error(errorMsg);
       }
 
-      const resources = await response.json();
-      console.log("Přijata data z backendu:", resources);
+      const responseData = await response.json();
+      console.log("Přijata strukturovaná data z backendu:", responseData);
 
-      if (file.type.startsWith("image/")) {
-        setExtractedTextFromBackend(`[OBRÁZEK ZPRACOVÁN BACKENDEM]: ${file.name} (OCR provedeno na serveru)`);
-      } else if (file.type === "text/plain") {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const content = e.target.result;
-            setExtractedTextFromBackend(`[TEXTOVÝ SOUBOR ZPRACOVÁN BACKENDEM]: ${file.name}
+      if (responseData && typeof responseData === 'object' &&
+          responseData.hasOwnProperty('fhir_resources') && responseData.hasOwnProperty('quality_issues')) {
+
+        const fhir_resources = responseData.fhir_resources;
+        const current_quality_issues = responseData.quality_issues;
+
+        setQualityIssues(current_quality_issues || []);
+
+        if (file.type.startsWith("image/")) {
+          setExtractedTextFromBackend(`[OBRÁZEK ZPRACOVÁN BACKENDEM]: ${file.name} (OCR provedeno na serveru)`);
+        } else if (file.type === "text/plain") {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+              const content = e.target.result;
+              setExtractedTextFromBackend(`[TEXTOVÝ SOUBOR ZPRACOVÁN BACKENDEM]: ${file.name}
 Obsah (prvních 100 znaků):
 ${content.substring(0,100)}...`);
-        };
-        reader.readAsText(file.slice(0, 100));
-      }
+          };
+          reader.readAsText(file.slice(0, 100));
+        }
 
-      if (!resources || resources.length === 0) {
-        console.log("Backend vrátil prázdná nebo žádná FHIR data.");
-        setFhirOutput({
+        if (!fhir_resources || fhir_resources.length === 0) {
+          console.log("Backend vrátil prázdná nebo žádná FHIR data v klíči 'fhir_resources'.");
+          setFhirOutput({
+              resourceType: "Bundle",
+              id: "bundle-empty-from-backend",
+              type: "collection",
+              entry: []
+          });
+        } else {
+          const bundle = {
             resourceType: "Bundle",
-            id: "bundle-empty-from-backend",
+            id: "bundle-from-backend",
             type: "collection",
-            entry: []
-        });
+            entry: fhir_resources.map(resource => ({
+              fullUrl: resource && resource.resourceType && resource.id ? `${resource.resourceType}/${resource.id}` : `urn:uuid:${Math.random().toString(36).substr(2, 9)}`, // Fallback fullUrl
+              resource: resource
+            }))
+          };
+          setFhirOutput(bundle);
+        }
       } else {
-        const bundle = {
-          resourceType: "Bundle",
-          id: "bundle-from-backend",
-          type: "collection",
-          entry: resources.map(resource => ({
-            fullUrl: `${resource.resourceType}/${resource.id}`,
-            resource: resource
-          }))
-        };
-        setFhirOutput(bundle);
+        console.error("Chybná struktura odpovědi z backendu:", responseData);
+        setError('Chybná struktura odpovědi z backendu. Očekáván objekt s klíči "fhir_resources" a "quality_issues".');
+        setFhirOutput(null);
+        setQualityIssues([]);
       }
 
     } catch (err) {
       console.error("Chyba při odesílání souboru nebo zpracování odpovědi z backendu:", err);
       setError(`Chyba při zpracování souboru: ${err.message}`);
       setFhirOutput(null);
+      setQualityIssues([]); // Reset quality issues on error
     } finally {
       setIsLoading(false);
       if (event && event.target) {
@@ -128,6 +145,54 @@ ${content.substring(0,100)}...`);
       console.warn("Chyba při formátování data:", dateTimeString, e);
       return dateTimeString; // V případě chyby vrátit původní řetězec
     }
+  };
+
+  // Helper funkce pro formátování pohlaví
+  const formatGender = (genderCode) => {
+    if (!genderCode) return 'N/A';
+    switch (genderCode.toLowerCase()) {
+      case 'male':
+        return 'Muž';
+      case 'female':
+        return 'Žena';
+      case 'other':
+        return 'Jiné';
+      case 'unknown':
+        return 'Neznámé';
+      default:
+        return genderCode;
+    }
+  };
+
+  // Helper funkce pro nalezení rodného čísla
+  const findRodneCislo = (identifiers) => {
+    if (!identifiers || !Array.isArray(identifiers)) {
+      return 'N/A';
+    }
+    const rodneCisloIdentifier = identifiers.find(id => {
+      if (!id || !id.type) return false;
+
+      // Podmínka 1: identifier.type.text je "Rodné číslo"
+      const typeTextMatch = id.type.text === "Rodné číslo";
+
+      // Podmínka 2: identifier.type.coding[0].code je "NI"
+      const hasNICode = Array.isArray(id.type.coding) &&
+                        id.type.coding.some(coding => coding.code === "NI" && coding.system === "http://terminology.hl7.org/CodeSystem/v2-0203");
+
+      // Podmínka 3: identifier.system je "urn:oid:1.2.203.17.4.1"
+      const systemIsRCOID = id.system === "urn:oid:1.2.203.17.4.1";
+
+      // Pravidla dle zadání: ("Rodné číslo" OR NI) AND RČ OID
+      // Pokud je type.text "Rodné číslo", bereme to i když systém není RČ OID, ale preferujeme RČ OID
+      if (typeTextMatch && systemIsRCOID) return true;
+      if (hasNICode && systemIsRCOID) return true;
+      // Fallback pokud je text "Rodné číslo", ale systém nesedí nebo chybí - méně striktní
+      if (typeTextMatch && !systemIsRCOID) return true;
+
+      return false;
+    });
+
+    return rodneCisloIdentifier ? rodneCisloIdentifier.value : 'N/A';
   };
 
 
@@ -173,6 +238,8 @@ ${content.substring(0,100)}...`);
                     <h4>Pacient (ID: {entry.resource.id || 'N/A'})</h4>
                     <p><strong>Jméno:</strong> {entry.resource.name?.[0]?.text || `${entry.resource.name?.[0]?.given?.join(' ') || ''} ${entry.resource.name?.[0]?.family || ''}`.trim() || 'N/A'}</p>
                     <p><strong>Datum narození:</strong> {formatFhirDateTime(entry.resource.birthDate)}</p>
+                    <p><strong>Pohlaví:</strong> {formatGender(entry.resource.gender)}</p>
+                    <p><strong>Rodné číslo:</strong> {findRodneCislo(entry.resource.identifier)}</p>
                   </div>
                 )}
                 {/* --- Zobrazení Pozorování (Krevní tlak) --- */}
@@ -274,6 +341,25 @@ ${content.substring(0,100)}...`);
           <section className="fhir-output-section">
             <h3>Strukturovaná FHIR Data (z Backendu):</h3>
             <p>Žádná strukturovaná FHIR data nebyla vygenerována nebo nalezena z backendu pro nahraný soubor.</p>
+          </section>
+        )}
+
+        {/* Sekce pro zobrazení problémů s kvalitou */}
+        {!isLoading && selectedFile && qualityIssues !== undefined && (
+          <section className="quality-issues-section">
+            <h3>Problémy s kvalitou dat</h3>
+            {qualityIssues.length > 0 ? (
+              qualityIssues.map((issue, index) => (
+                <div key={index} className={`quality-issue quality-issue-${issue.level?.toLowerCase() || 'info'}`}>
+                  <p><strong>Úroveň:</strong> {issue.level || 'N/A'}</p>
+                  <p><strong>Zpráva:</strong> {issue.message || 'N/A'}</p>
+                  {issue.field && <p><strong>Pole:</strong> {issue.field}</p>}
+                  {issue.value && <p><strong>Hodnota:</strong> {String(issue.value)}</p>}
+                </div>
+              ))
+            ) : (
+              <p>Nebyly nalezeny žádné problémy s kvalitou dat.</p>
+            )}
           </section>
         )}
       </main>
