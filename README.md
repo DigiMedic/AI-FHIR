@@ -24,6 +24,8 @@ Zdravotnická zařízení často čelí výzvám při práci s nestrukturovaným
 4. **Pokročilá validace dat**: Integrované kontroly pro zajištění konzistence a správnosti dat, včetně porovnání údajů z rodného čísla s datem narození, kontroly fyziologických rozsahů pro měřené hodnoty a ověření časové platnosti záznamů.
 5. **Integrace s DigiMedic**: Napojení na DigiMedic backend pro správu strukturovaných dat.
 6. **Uživatelské rozhraní**: Jednoduché rozhraní pro nahrávání dokumentů a vizualizaci výsledků.
+7.  **Automatické odesílání na DigiMedic FHIR Server**: Po úspěšné extrakci a transformaci dat na FHIR zdroje komponenta automaticky sestaví FHIR Bundle a odešle jej na nakonfigurovaný DigiMedic FHIR server. Tato funkce pracuje ve výchozím simulovaném režimu. Pro odesílání na reálný server je nutné nastavit proměnné prostředí `DIGIMEDIC_API_BASE_URL` a `DIGIMEDIC_API_TOKEN`.
+8.  **Detailní záznamy o kvalitě zpracování**: Během procesu extrakce a mapování systém interně sbírá podrobné informace o možných problémech nebo nestandardních hodnotách (tzv. "quality issues"). Tyto záznamy jsou logovány na serveru a poskytují cennou zpětnou vazbu pro monitorování a budoucí vylepšení, včetně podpory pro uživatelské rozhraní při revizi dat.
 
 ### Technologický stack
 - **Frontend**: React.js
@@ -83,17 +85,17 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - [ ] Případné dotrénování (fine-tuning) modelu na specifických datech (pokud budou dostupná).
 - [x] **Pokročilá validace a návrh korekce dat:**
     - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
-    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích).
+    - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích). Backend nyní generuje strukturované "quality issues", které mohou sloužit jako základ pro tuto UI funkcionalitu.
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
-    - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů.
+    - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend nyní poskytuje strukturované 'quality issues'.)
 - [x] **Formalizace testování a výkonnostní optimalizace:**
-    - [x] Rozšířená sada jednotkových testů pro backend (logika extrakce NLP i regex, mapování, validace, pomocné funkce) implementována pomocí pytest.
+    - [x] Implementována a rozšířena sada jednotkových a integračních testů pro backend (endpointy, logika extrakce a mapování, API klient) pomocí pytest.
     - [~] Provedeno základní profilování kritických částí aplikace (NLP extrakce, FHIR mapování) a identifikace potenciálních oblastí pro optimalizaci. Výkon je prozatím považován za akceptovatelný pro typické vstupy.
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
 - [ ] Komplexní testování komponenty
-- [~] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí. Propojení s frontendem a plná integrace s produkčním API je dalším krokem.
+- [x] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí a automatickým odesíláním FHIR Bundlů z hlavního zpracovávacího endpointu. Propojení s frontendem pro řízení tohoto procesu a plná integrace s produkčním API je dalším krokem.
 - [ ] Tvorba uživatelské dokumentace
 - [ ] Příprava na nasazení
 ## Začínáme
