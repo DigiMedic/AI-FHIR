@@ -78,3 +78,57 @@ pre {
   border-top: 1px solid #e0e0e0;
   margin-top: 20px;
 }
+
+/* Styly pro sekci problémů s kvalitou dat */
+.quality-issues-section {
+  margin-top: 30px; /* Zvětšeno z 20px pro lepší oddělení */
+  padding: 15px;
+  background-color: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 5px; /* Přidáno pro konzistenci s ostatními sekcemi */
+}
+
+.quality-issues-section h3 {
+  margin-top: 0;
+  color: #2c3e50; /* Konzistentní barva nadpisů */
+}
+
+.quality-issue {
+  padding: 10px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  border: 1px solid transparent; /* Základní border, aby se neměnil layout při hover/focus, pokud by byl přidán */
+}
+
+.quality-issue-critical, /* Critical je často mapováno na error-like zobrazení */
+.quality-issue-error {
+  background-color: #ffebee; /* Světle červená */
+  border-left: 5px solid #f44336; /* Červený levý okraj */
+  color: #c62828; /* Tmavší červený text pro lepší kontrast */
+}
+.quality-issue-critical { /* Mírně tmavší pro odlišení, pokud by bylo potřeba */
+  background-color: #ffcdd2;
+  border-left-color: #b71c1c;
+}
+
+.quality-issue-warning {
+  background-color: #fff8e1; /* Světle žlutá/oranžová */
+  border-left: 5px solid #ffc107; /* Žlutý/Oranžový levý okraj */
+  color: #e65100; /* Tmavší oranžový text */
+}
+
+.quality-issue-info {
+  background-color: #e3f2fd; /* Světle modrá */
+  border-left: 5px solid #2196f3; /* Modrý levý okraj */
+  color: #0d47a1; /* Tmavší modrý text */
+}
+
+.quality-issue p {
+  margin: 5px 0;
+  font-size: 0.95em;
+}
+
+.quality-issue strong {
+  /* color: #333; - Odstraněno, aby barva byla dána rodičovským kontejnerem (.quality-issue-level) */
+  font-weight: bold; /* React defaultně nedělá strong tučně v některých kontextech, tak pro jistotu */
+}

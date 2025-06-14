@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from pydantic import BaseModel # Ponecháno pro případné budoucí použití, aktuálně není potřeba
+from pydantic import BaseModel
 from typing import List, Dict, Any
 import sys
 import os
@@ -36,7 +36,12 @@ TEMP_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "temp_uploads")
 # Vytvoření adresáře již bylo provedeno v předchozím subtasku, ale exist_ok=True nevadí
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 
-@app.post("/api/process_document", response_model=List[Dict[str, Any]])
+# Definice nového response modelu
+class ProcessingResult(BaseModel):
+    fhir_resources: List[Dict[str, Any]]
+    quality_issues: List[Dict[str, Any]]
+
+@app.post("/api/process_document", response_model=ProcessingResult)
 async def process_document_endpoint(file: UploadFile = File(...)):
     """
     Endpoint pro zpracování nahraného dokumentu (textového nebo obrázkového).
@@ -104,7 +109,8 @@ async def process_document_endpoint(file: UploadFile = File(...)):
         # fhir_mapper by měl být schopen zpracovat prázdný list entit (a vrátit pak také prázdný seznam zdrojů).
 
         if should_return_empty:
-            return []
+            # Return empty lists for both fields if extraction fails significantly
+            return ProcessingResult(fhir_resources=[], quality_issues=[])
 
         # Mapování na FHIR zdroje
         # `original_text_for_fhir` je důležitý pro regex fallback v map_text_to_fhir,
@@ -166,15 +172,19 @@ async def process_document_endpoint(file: UploadFile = File(...)):
 
             except Exception as api_ex:
                 print(f"CHYBA: Nepodařilo se odeslat FHIR bundle přes DigiMedicAPIClient: {str(api_ex)}", file=sys.stderr)
-                # Pokračujeme a vracíme fhir_resources, i když odeslání selhalo
+                # Pokračujeme a vracíme fhir_resources a quality_issues, i když odeslání selhalo
 
-        return fhir_resources
+        return ProcessingResult(fhir_resources=fhir_resources, quality_issues=quality_issues)
 
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         print(f"CHYBA: Neočekávaná chyba při zpracování souboru {file.filename}: {str(e)}\n{traceback.format_exc()}", file=sys.stderr)
+        # V případě neočekávané chyby také vracíme strukturovanou odpověď, pokud je to možné,
+        # nebo necháme FastAPI defaultní handler pro 500. Pro konzistenci je lepší vrátit prázdné.
+        # Nicméně, pokud chyba nastane před definicí fhir_resources/quality_issues, museli bychom je zde inicializovat.
+        # Pro jednoduchost necháme původní raise HTTPException, který FastAPI zpracuje.
         raise HTTPException(status_code=500, detail="Interní chyba serveru při zpracování souboru.")
     finally:
         if os.path.exists(temp_file_path):

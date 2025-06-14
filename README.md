@@ -88,13 +88,13 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - [x] Návrh mechanismu pro označování a případnou manuální korekci sporných dat v UI (konceptuální návrh dokončen, implementace v UI je plánována v dalších fázích). Backend nyní generuje strukturované "quality issues", které mohou sloužit jako základ pro tuto UI funkcionalitu.
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
-    - [ ] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend nyní poskytuje strukturované 'quality issues'.)
-- [x] **Formalizace testování a výkonnostní optimalizace:**
+    - [~] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend poskytuje strukturované 'quality issues', frontend nyní tyto problémy zobrazuje přehledněji).
+- [x]/[~] **Formalizace testování a výkonnostní optimalizace:** Implementována a rozšířena sada jednotkových a integračních testů pro backend. Přidány základní frontendové testy (React Testing Library) a backendový test pro zpracování obrázků.
     - [x] Implementována a rozšířena sada jednotkových a integračních testů pro backend (endpointy, logika extrakce a mapování, API klient) pomocí pytest.
     - [~] Provedeno základní profilování kritických částí aplikace (NLP extrakce, FHIR mapování) a identifikace potenciálních oblastí pro optimalizaci. Výkon je prozatím považován za akceptovatelný pro typické vstupy.
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
-- [ ] Komplexní testování komponenty
+- [~] Komplexní testování komponenty (základní frontendové a specifické backendové testy přidány).
 - [x] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí a automatickým odesíláním FHIR Bundlů z hlavního zpracovávacího endpointu. Propojení s frontendem pro řízení tohoto procesu a plná integrace s produkčním API je dalším krokem.
 - [ ] Tvorba uživatelské dokumentace
 - [ ] Příprava na nasazení
@@ -120,8 +120,8 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
    ```
 3. Nastavte proměnné prostředí:
    `Proměnné prostředí se nastavují následovně:`
-   *   `Pro backend (FastAPI/Uvicorn): Pokud existuje soubor \`.env.example\` v kořenovém adresáři nebo v \`backend/\`, zkopírujte jej jako \`.env\` a upravte podle potřeby (např. pro nastavení Uvicorn serveru). Backend aktuálně nenačítá \`.env\` soubor přímo pro svou aplikační logiku. Pro konfiguraci DigiMedic API klienta v reálném (nesimulovaném) režimu nastavte proměnné prostředí \`DIGIMEDIC_API_BASE_URL\` a \`DIGIMEDIC_API_TOKEN\`. Pokud nejsou nastaveny a klient není v simulovaném režimu, jeho chování může být omezené nebo může selhat (poběží v simulovaném režimu s varováním).`
-   *   `Pro frontend (React): Pro nastavení specifických proměnných pro frontend, jako je URL adresa backendového API, vytvořte soubor \`frontend/.env\`. Do tohoto souboru můžete přidat proměnné s prefixem \`REACT_APP_\`, například: \`REACT_APP_API_URL=http://localhost:8000/api\`. Tyto proměnné pak budou dostupné v kódu frontendu přes \`process.env.REACT_APP_...\`.`
+   *   `Pro backend (FastAPI/Uvicorn): V adresáři \`backend/\` naleznete soubor \`.env.example\`. Zkopírujte jej v tom samém adresáři jako \`backend/.env\` a upravte hodnoty proměnných \`DIGIMEDIC_API_BASE_URL\` a \`DIGIMEDIC_API_TOKEN\` pro konfiguraci DigiMedic API klienta v reálném (nesimulovaném) režimu. Pokud tyto proměnné nejsou nastaveny nebo soubor \`.env\` neexistuje, DigiMedicAPIClient poběží v simulovaném režimu. Ostatní proměnné v \`.env.example\` jsou ukázkové a nemusí být přímo využívány aplikací, pokud není specifikováno jinak.`
+   *   `Pro frontend (React): V adresáři \`frontend/\` naleznete soubor \`.env.example\`. Zkopírujte jej v tom samém adresáři jako \`frontend/.env\` a upravte hodnotu proměnné \`REACT_APP_API_URL\` pro nastavení adresy backendového API. Proměnné v tomto souboru musí začínat prefixem \`REACT_APP_\`.`
 4. Spusťte vývojový server:
    `Spuštění vývojových serverů:`
    *   `Pro backend (z kořenového adresáře projektu): uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`

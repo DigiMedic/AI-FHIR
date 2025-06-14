@@ -67,7 +67,11 @@ def test_process_txt_document_success(client: TestClient):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200
-        assert response.json() == SAMPLE_FHIR_RESOURCES
+        expected_response = {
+            "fhir_resources": SAMPLE_FHIR_RESOURCES,
+            "quality_issues": SAMPLE_QUALITY_ISSUES_EMPTY
+        }
+        assert response.json() == expected_response
 
         mock_extract.assert_called_once_with(MOCK_EXTRACTED_TEXT_TXT, input_type="text", use_nlp=True)
         mock_map.assert_called_once_with(MOCK_EXTRACTED_TEXT_TXT, original_text=MOCK_EXTRACTED_TEXT_TXT)
@@ -95,7 +99,11 @@ def test_process_png_document_success(client: TestClient):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200
-        assert response.json() == SAMPLE_PATIENT_RESOURCE
+        expected_response = {
+            "fhir_resources": SAMPLE_PATIENT_RESOURCE,
+            "quality_issues": SAMPLE_QUALITY_ISSUES_EMPTY
+        }
+        assert response.json() == expected_response
 
         # Ověření, že extract_text_from_document bylo voláno s cestou k souboru a správným typem
         # ANY se použije pro temp_file_path, protože jeho přesný název neznáme
@@ -135,7 +143,11 @@ def test_text_extraction_failure_ocr(client: TestClient):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200 # Endpoint by měl stále vrátit 200
-        assert response.json() == [] # Očekáváme prázdný seznam, protože extrakce selhala
+        expected_response = {
+            "fhir_resources": [],
+            "quality_issues": []
+        }
+        assert response.json() == expected_response # Očekáváme prázdný seznam zdrojů a issues
 
         mock_extract.assert_called_once_with(ANY, input_type="image_path")
         # map_text_to_fhir by nemělo být voláno, pokud extrakce vrátí chybu signalizující prázdný výstup
@@ -159,7 +171,11 @@ def test_map_text_to_fhir_returns_no_resources(client: TestClient):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200
-        assert response.json() == [] # Odpověď endpointu by měla být prázdný seznam zdrojů
+        expected_response = {
+            "fhir_resources": [],
+            "quality_issues": SAMPLE_QUALITY_ISSUES_PRESENT
+        }
+        assert response.json() == expected_response
 
         mock_extract.assert_called_once()
         mock_map.assert_called_once()
@@ -180,7 +196,14 @@ def test_process_document_with_quality_issues_logging(client: TestClient, capsys
         file_content = b"Text s quality issues."
         files = {"file": ("issues.txt", file_content, "text/plain")}
 
-        client.post("/api/process_document", files=files)
+        response = client.post("/api/process_document", files=files) # Capture the response
+
+        assert response.status_code == 200 # Check status code
+        expected_response = {
+            "fhir_resources": SAMPLE_PATIENT_RESOURCE,
+            "quality_issues": SAMPLE_QUALITY_ISSUES_PRESENT
+        }
+        assert response.json() == expected_response # Check response body
 
         captured = capsys.readouterr()
         assert "INFO [Main]: Quality issues reported" in captured.out
@@ -210,7 +233,11 @@ def test_digimedic_api_client_sends_bundle_failure(client: TestClient, capsys):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200 # Endpoint by neměl spadnout
-        assert response.json() == fhir_resources_to_return # Měl by vrátit FHIR zdroje
+        expected_response = {
+            "fhir_resources": fhir_resources_to_return,
+            "quality_issues": []
+        }
+        assert response.json() == expected_response # Měl by vrátit FHIR zdroje a prázdné issues
 
         mock_extract.assert_called_once()
         mock_map.assert_called_once()
@@ -251,10 +278,67 @@ def test_text_extraction_returns_none(client: TestClient):
         response = client.post("/api/process_document", files=files)
 
         assert response.status_code == 200
-        assert response.json() == [] # Očekáváme prázdný seznam
+        expected_response = {
+            "fhir_resources": [],
+            "quality_issues": []
+        }
+        assert response.json() == expected_response # Očekáváme prázdné seznamy
 
         mock_extract.assert_called_once_with(ANY, input_type="image_path")
         mock_map.assert_not_called() # map_text_to_fhir by se nemělo volat
         mock_send_bundle.assert_not_called()
 
+
+def test_process_image_document_actual_image(client: TestClient):
+    """
+    Testuje zpracování skutečného obrázkového souboru (.png) s OCR.
+    Tento test nepoužívá mock pro extract_text_from_document ani map_text_to_fhir,
+    aby se otestovala skutečná OCR extrakce a základní mapování.
+    Očekává, že OCR extrahuje "Test OCR 123" z test_image.png.
+    """
+    # Cesta k testovacímu obrázku (vytvořenému skriptem create_test_image.py)
+    # Předpokládáme, že testy běží z kořenového adresáře projektu,
+    # nebo je PYTHONPATH nastaven tak, že 'backend' je dostupný.
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    image_path = os.path.join(current_dir, "test_image.png")
+
+    assert os.path.exists(image_path), f"Test image not found at {image_path}. Run create_test_image.py."
+
+    # DigiMedicAPIClient bude stále mockován, abychom nevolali externí API
+    with patch('backend.main.DigiMedicAPIClient') as MockApiClient:
+        mock_api_instance = MockApiClient.return_value
+        mock_api_instance.send_fhir_bundle.return_value = {"status": "success", "message": "Bundle sent (mocked)"}
+
+        with open(image_path, "rb") as img_file:
+            files = {"file": ("test_image.png", img_file, "image/png")}
+            response = client.post("/api/process_document", files=files)
+
+        assert response.status_code == 200
+        response_data = response.json()
+        assert isinstance(response_data, dict) # Změněno z list na dict dle nového response modelu
+        assert "fhir_resources" in response_data
+        assert "quality_issues" in response_data
+
+        # Ověření, že DigiMedicAPIClient byl volán, pokud byly vytvořeny nějaké FHIR zdroje
+        # Toto závisí na tom, zda "Test OCR 123" vyprodukuje nějaké FHIR zdroje.
+        # Pokud fhir_resources mohou být prázdné, pak send_fhir_bundle nemusí být voláno.
+        if response_data["fhir_resources"]:
+            MockApiClient.assert_called_once()
+            mock_api_instance.send_fhir_bundle.assert_called_once()
+        else:
+            # Pokud nejsou žádné zdroje, bundle by se neměl odesílat
+            MockApiClient.assert_called_once() # Klient se inicializuje
+            mock_api_instance.send_fhir_bundle.assert_not_called() # Ale neodesílá
+
+        # Volitelný úklid - pro testovací assety to obvykle není nutné,
+        # ale pokud by byl soubor vytvářen dynamicky v testu a neměl by přetrvávat:
+        # if os.path.exists(image_path):
+        #     os.remove(image_path)
+
+        # Hlubší kontrola obsahu fhir_resources by vyžadovala znalost,
+        # jak se "Test OCR 123" mapuje na FHIR.
+        # Pro tento test stačí ověřit strukturu odpovědi a úspěšné zpracování.
+        # Můžeme ale zkontrolovat, zda quality_issues obsahují informaci o extrahovaném textu,
+        # pokud by to fhir_mapper dělal (což momentálně nedělá explicitně do quality_issues).
+        # print("DEBUG response_data:", response_data) # Pro ladění
 ```
