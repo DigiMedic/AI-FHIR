@@ -263,6 +263,171 @@ def test_digimedic_api_client_sends_bundle_failure(client: TestClient, capsys):
 # TODO: Zvážit test pro případ, kdy extrakce textu vrátí None (ne chybový string)
 # TODO: Zvážit test pro případ, kdy soubor nelze uložit na disk (oprávnění, plný disk) - těžší na čisté mockování
 
+
+# --- Fixtures pro testy /api/suggest_correction ---
+@pytest.fixture(scope="function")
+def correction_file_manager():
+    """
+    Fixture pro správu souboru s návrhy korekcí před a po každém testu.
+    Zajišťuje, že testy běží s čistým souborem.
+    """
+    from backend.main import CORRECTIONS_FILE_PATH, DATA_DIR
+    # Zajistit existenci adresáře DATA_DIR
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Smazat soubor před testem, pokud existuje
+    if os.path.exists(CORRECTIONS_FILE_PATH):
+        os.remove(CORRECTIONS_FILE_PATH)
+
+    yield CORRECTIONS_FILE_PATH # Poskytne cestu k souboru testu, pokud by ji potřeboval
+
+    # Smazat soubor po testu
+    if os.path.exists(CORRECTIONS_FILE_PATH):
+        os.remove(CORRECTIONS_FILE_PATH)
+
+# --- Testy pro /api/suggest_correction ---
+
+@patch('backend.main.datetime')
+def test_suggest_correction_success(mock_datetime, client: TestClient, correction_file_manager):
+    """
+    Testuje úspěšné přijetí a uložení jednoho návrhu korekce.
+    """
+    # Nastavení mockovaného času
+    # Pro přístup k datetime.utcnow().isoformat() je potřeba mockovat datetime.datetime
+    mock_dt_instance = MagicMock()
+    mock_dt_instance.isoformat.return_value = "2024-07-28T10:00:00" # Čas bez 'Z' jak to dělá datetime.utcnow().isoformat()
+
+    # Mock datetime.utcnow() aby vracelo naši mockovanou instanci datetime objektu
+    mock_datetime.utcnow.return_value = mock_dt_instance
+
+    # Cesta k souboru s korekcemi z fixture
+    corrections_file = correction_file_manager
+
+    payload = {
+        "originalIssue": {
+            "level": "Warning",
+            "message": "Původní problém",
+            "field": "Patient.name.given",
+            "value": "Pateint"
+        },
+        "suggestedValue": "Patient",
+        "fileName": "test_document.txt",
+        "comment": "Oprava překlepu"
+    }
+
+    response = client.post("/api/suggest_correction", json=payload)
+
+    assert response.status_code == 200
+    response_data = response.json()
+    assert response_data["message"] == "Návrh na korekci byl úspěšně přijat a uložen."
+
+    # Ověření struktury suggestion_details
+    stored_suggestion = response_data["suggestion_details"]
+    assert stored_suggestion["fileName"] == payload["fileName"]
+    assert stored_suggestion["suggestedValue"] == payload["suggestedValue"]
+    assert stored_suggestion["comment"] == payload["comment"]
+    assert stored_suggestion["originalIssue"]["field"] == payload["originalIssue"]["field"]
+    assert "received_timestamp" in stored_suggestion
+    assert stored_suggestion["received_timestamp"] == "2024-07-28T10:00:00Z" # Ověření mockovaného času s přidaným 'Z'
+
+    # Ověření obsahu souboru
+    assert os.path.exists(corrections_file)
+    with open(corrections_file, 'r', encoding='utf-8') as f:
+        saved_suggestions = json.load(f)
+
+    assert isinstance(saved_suggestions, list)
+    assert len(saved_suggestions) == 1
+
+    saved_entry = saved_suggestions[0]
+    assert saved_entry["fileName"] == payload["fileName"]
+    assert saved_entry["suggestedValue"] == payload["suggestedValue"]
+    assert saved_entry["comment"] == payload["comment"]
+    assert saved_entry["originalIssue"]["message"] == payload["originalIssue"]["message"]
+    assert saved_entry["received_timestamp"] == "2024-07-28T10:00:00Z"
+
+
+@patch('backend.main.datetime')
+def test_suggest_correction_multiple_suggestions(mock_datetime, client: TestClient, correction_file_manager):
+    """
+    Testuje úspěšné uložení více návrhů korekcí.
+    """
+    mock_dt_instance = MagicMock()
+    mock_dt_instance.isoformat.side_effect = ["2024-07-28T10:00:00", "2024-07-28T10:05:00"]
+    mock_datetime.utcnow.return_value = mock_dt_instance
+
+    corrections_file = correction_file_manager
+
+    payload1 = {
+        "originalIssue": {"level": "Info", "message": "Problém 1", "field": "field1", "value": "val1"},
+        "suggestedValue": "suggestion1",
+        "fileName": "doc1.txt",
+        "comment": "Komentář 1"
+    }
+    payload2 = {
+        "originalIssue": {"level": "Error", "message": "Problém 2", "field": "field2", "value": "val2"},
+        "suggestedValue": "suggestion2",
+        "fileName": "doc2.txt",
+        "comment": "Komentář 2"
+    }
+
+    response1 = client.post("/api/suggest_correction", json=payload1)
+    assert response1.status_code == 200
+
+    response2 = client.post("/api/suggest_correction", json=payload2)
+    assert response2.status_code == 200
+
+    assert os.path.exists(corrections_file)
+    with open(corrections_file, 'r', encoding='utf-8') as f:
+        saved_suggestions = json.load(f)
+
+    assert isinstance(saved_suggestions, list)
+    assert len(saved_suggestions) == 2
+
+    assert saved_suggestions[0]["suggestedValue"] == "suggestion1"
+    assert saved_suggestions[0]["fileName"] == "doc1.txt"
+    assert saved_suggestions[0]["received_timestamp"] == "2024-07-28T10:00:00Z"
+
+    assert saved_suggestions[1]["suggestedValue"] == "suggestion2"
+    assert saved_suggestions[1]["fileName"] == "doc2.txt"
+    assert saved_suggestions[1]["received_timestamp"] == "2024-07-28T10:05:00Z"
+
+
+def test_suggest_correction_file_creation(client: TestClient, correction_file_manager):
+    """
+    Testuje, zda je soubor s návrhy vytvořen, pokud původně neexistoval.
+    """
+    from backend.main import CORRECTIONS_FILE_PATH # Použijeme cestu definovanou v main
+
+    # Fixture `correction_file_manager` zajistí, že soubor na začátku neexistuje.
+    assert not os.path.exists(CORRECTIONS_FILE_PATH)
+
+    payload = {
+        "originalIssue": {"level": "Info", "message": "Test", "field": "test.field", "value": "old"},
+        "suggestedValue": "new",
+        "fileName": "file_creation_test.txt"
+    }
+    # Mock datetime není nutný, pokud nám nezáleží na přesném timestampu v tomto testu
+    response = client.post("/api/suggest_correction", json=payload)
+    assert response.status_code == 200
+    assert os.path.exists(CORRECTIONS_FILE_PATH)
+
+
+def test_suggest_correction_invalid_payload_missing_field(client: TestClient, correction_file_manager):
+    """
+    Testuje odeslání nevalidního payloadu (chybí povinné pole 'fileName').
+    """
+    payload = {
+        "originalIssue": {"level": "Warning", "message": "Missing file name", "field": "some.field", "value": "abc"},
+        "suggestedValue": "def"
+        # Chybí "fileName"
+    }
+    response = client.post("/api/suggest_correction", json=payload)
+    assert response.status_code == 422 # Unprocessable Entity
+    response_data = response.json()
+    assert "detail" in response_data
+    assert any(err["type"] == "missing" and "fileName" in err["loc"] for err in response_data["detail"])
+
+
 # Dodatečný test pro None z extract_text_from_document
 def test_text_extraction_returns_none(client: TestClient):
     """
