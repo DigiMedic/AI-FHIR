@@ -114,6 +114,7 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - Musí být nainstalovaný v systému pro zpracování obrázkových dokumentů.
     - Oficiální instalační příručka: [Tesseract OCR Installation](https://tesseract-ocr.github.io/tessdoc/Installation.html).
     - Ujistěte se, že máte nainstalovaná jazyková data minimálně pro češtinu (`ces`) a případně angličtinu (`eng`), pokud budete zpracovávat dokumenty v těchto jazycích. Další jazyky dle potřeby.
+    - Například na systémech Debian/Ubuntu se jazyková data často instalují pomocí balíčku jako `tesseract-ocr-ces`. Ověřte si název balíčku pro vaši distribuci.
     - Aplikace očekává, že Tesseract je v systémové PATH. Pokud tomu tak není, může být potřeba upravit cestu k `tesseract_cmd` v souboru `backend/ai_models/text_extractor.py` (aktuálně se však spoléhá na PATH).
 - **Stanza NLP Model:** Při prvním spuštění komponenty, která využívá NLP model Stanza, může dojít k automatickému stažení jazykového modelu pro češtinu (pokud již není přítomen v systému v defaultním umístění Stanza modelů, typicky `~/stanza_resources`). Toto stažení vyžaduje připojení k internetu.
 
