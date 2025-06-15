@@ -2,36 +2,45 @@
 import React, { useState } from 'react';
 import './App.css';
 
-/**
- * Hlavní komponenta aplikace AI-FHIR.
- * Umožňuje nahrání textového nebo obrázkového souboru,
- * odeslání na backend pro zpracování (včetně OCR pro obrázky)
- * a zobrazení výsledných FHIR dat, včetně nově přidaných diagnóz (Condition).
- * Nově také umožňuje navrhovat korekce pro problémy s kvalitou dat.
- */
+// Import nově vytvořených komponent
+import FileUploadSection from './components/FileUploadSection';
+import ProcessingInfo from './components/ProcessingInfo';
+import FhirResourceBundleDisplay from './components/FhirResourceBundleDisplay';
+import QualityIssuesSection from './components/QualityIssuesSection';
+import LoadingIndicator from './components/LoadingIndicator';
+import ErrorMessage from './components/ErrorMessage';
+
+// Import utilit (pokud by byly potřeba přímo v App.js, jinak jsou v komponentách)
+// Např. pokud bychom chtěli nějaké formátování přímo zde.
+// Prozatím nejsou explicitně potřeba, protože formátování je zapouzdřeno.
+
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
-  const [extractedTextFromBackend, setExtractedTextFromBackend] = useState('');
+  const [processingStatusText, setProcessingStatusText] = useState(''); // Přejmenováno z extractedTextFromBackend
   const [error, setError] = useState('');
   const [fhirOutput, setFhirOutput] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [qualityIssues, setQualityIssues] = useState([]);
   const [editingIssueIndex, setEditingIssueIndex] = useState(null);
   const [correctionSuggestion, setCorrectionSuggestion] = useState('');
+  const [correctionComment, setCorrectionComment] = useState('');
   const [correctionStatus, setCorrectionStatus] = useState('');
+  const [digimedicStatusMessage, setDigimedicStatusMessage] = useState(''); // Nový stav
 
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
   const handleFileChange = async (event) => {
     const file = event.target.files[0];
     setError('');
-    setExtractedTextFromBackend('');
+    setProcessingStatusText('');
     setFhirOutput(null);
     setQualityIssues([]);
     setSelectedFile(null);
-    // Reset correction-related states
     setEditingIssueIndex(null);
     setCorrectionSuggestion('');
+    setCorrectionComment(''); // Již zde bylo z předchozího kroku
     setCorrectionStatus('');
+    setDigimedicStatusMessage(''); // Reset DigiMedic statusu
 
     if (!file) {
       return;
@@ -44,8 +53,8 @@ function App() {
     formData.append('file', file);
 
     try {
-      console.log(`Odesílání souboru ${file.name} (${file.type}) na backend...`);
-      const response = await fetch('http://localhost:8000/api/process_document', {
+      console.log(`Odesílání souboru ${file.name} (${file.type}) na backend: ${API_URL}/api/process_document`);
+      const response = await fetch(`${API_URL}/api/process_document`, {
         method: 'POST',
         body: formData,
       });
@@ -56,8 +65,8 @@ function App() {
             const errorData = await response.json();
             if (errorData && errorData.detail) {
                  errorMsg = `Chyba z backendu: ${errorData.detail}`;
-            } else if (Array.isArray(errorData) && errorData.length === 0 && response.status !== 200) {
-                errorMsg = `Backend vrátil neočekávanou prázdnou odpověď se statusem ${response.status}.`;
+            } else if (errorData && Array.isArray(errorData.detail) && errorData.detail.length > 0 && errorData.detail[0].msg) {
+                 errorMsg = `Chyba validace z backendu: ${errorData.detail[0].msg} (pole: ${errorData.detail[0].loc?.join('->') || 'N/A'})`;
             }
         } catch (e) {
             console.warn("Nepodařilo se parsovat chybovou JSON odpověď z backendu:", e);
@@ -73,20 +82,29 @@ function App() {
 
         const fhir_resources = responseData.fhir_resources;
         const current_quality_issues = responseData.quality_issues;
+        const digimedic_submission_status = responseData.digimedic_submission_status; // Zpracování nového klíče
 
         setQualityIssues(current_quality_issues || []);
+        if (digimedic_submission_status) {
+          setDigimedicStatusMessage(digimedic_submission_status);
+        } else {
+          // Fallback, pokud backend nevrátí status (pro starší verze nebo chybu)
+          if (fhir_resources && fhir_resources.length > 0) { // Jen pokud se zdá, že se něco mohlo odesílat
+            setDigimedicStatusMessage("Informace o odeslání na DigiMedic API nebyla explicitně poskytnuta backendem.");
+          }
+        }
 
         if (file.type.startsWith("image/")) {
-          setExtractedTextFromBackend(`[OBRÁZEK ZPRACOVÁN BACKENDEM]: ${file.name} (OCR provedeno na serveru)`);
+          setProcessingStatusText(`[OBRÁZEK ZPRACOVÁN BACKENDEM]: ${file.name} (OCR provedeno na serveru)`);
         } else if (file.type === "text/plain") {
           const reader = new FileReader();
           reader.onload = (e) => {
               const content = e.target.result;
-              setExtractedTextFromBackend(`[TEXTOVÝ SOUBOR ZPRACOVÁN BACKENDEM]: ${file.name}
+              setProcessingStatusText(`[TEXTOVÝ SOUBOR ZPRACOVÁN BACKENDEM]: ${file.name}
 Obsah (prvních 100 znaků):
 ${content.substring(0,100)}...`);
           };
-          reader.readAsText(file.slice(0, 100));
+          reader.readAsText(file.slice(0, 100)); // Jen prvních 100 znaků pro zobrazení
         }
 
         if (!fhir_resources || fhir_resources.length === 0) {
@@ -101,9 +119,9 @@ ${content.substring(0,100)}...`);
           const bundle = {
             resourceType: "Bundle",
             id: "bundle-from-backend",
-            type: "collection",
+            type: "collection", // Nebo jiný typ, pokud backend specifikuje
             entry: fhir_resources.map(resource => ({
-              fullUrl: resource && resource.resourceType && resource.id ? `${resource.resourceType}/${resource.id}` : `urn:uuid:${Math.random().toString(36).substr(2, 9)}`, // Fallback fullUrl
+              fullUrl: resource && resource.resourceType && resource.id ? `${resource.resourceType}/${resource.id}` : `urn:uuid:${Math.random().toString(36).substr(2, 9)}`,
               resource: resource
             }))
           };
@@ -131,57 +149,63 @@ ${content.substring(0,100)}...`);
 
   const handleStartCorrection = (index) => {
     setEditingIssueIndex(index);
-    setCorrectionSuggestion(String(qualityIssues[index].value !== undefined ? qualityIssues[index].value : ''));
-    setCorrectionStatus(''); // Clear previous status messages
+    const issueValue = qualityIssues[index]?.value;
+    setCorrectionSuggestion(issueValue !== undefined && issueValue !== null ? String(issueValue) : '');
+    setCorrectionComment(''); // Reset komentáře při otevření nového formuláře
+    setCorrectionStatus('');
   };
 
   const handleCancelCorrection = () => {
     setEditingIssueIndex(null);
     setCorrectionSuggestion('');
-    // Optionally clear correctionStatus here if desired, or manage its lifecycle elsewhere
-    // setCorrectionStatus('');
+    setCorrectionComment(''); // Reset komentáře
   };
 
   const handleSuggestionChange = (event) => {
     setCorrectionSuggestion(event.target.value);
   };
 
+  const handleCorrectionCommentChange = (event) => { // Nový handler
+    setCorrectionComment(event.target.value);
+  };
+
   const handleSubmitCorrection = async (index) => {
     const originalIssue = qualityIssues[index];
+    if (!originalIssue) {
+      setCorrectionStatus("Chyba: Původní problém s kvalitou nenalezen.");
+      return;
+    }
+
     const payload = {
-      originalIssue: {
+      originalIssue: { // Struktura dle Pydantic modelu na backendu
         level: originalIssue.level,
         message: originalIssue.message,
-        field: originalIssue.field,
+        field: originalIssue.field || originalIssue.path, // Použijeme 'path', pokud 'field' není
         value: originalIssue.value !== undefined ? String(originalIssue.value) : null
       },
       suggestedValue: correctionSuggestion,
-      fileName: selectedFile ? selectedFile.name : 'N/A'
+      fileName: selectedFile ? selectedFile.name : 'N/A',
+      comment: correctionComment // Přidání komentáře do payloadu
     };
 
     setIsLoading(true);
-    setCorrectionStatus(''); // Clear previous status
+    setCorrectionStatus('');
 
     try {
-      const response = await fetch('http://localhost:8000/api/suggest_correction', {
+      const response = await fetch(`${API_URL}/api/suggest_correction`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
+      const responseData = await response.json(); // Zkusíme parsovat JSON vždy
+
       if (response.ok) {
-        setCorrectionStatus("Návrh úspěšně odeslán.");
+        setCorrectionStatus(responseData.message || "Návrh úspěšně odeslán.");
       } else {
-        let errorMsg = `Chyba serveru: ${response.status}`;
-        try {
-          const errorData = await response.json();
-          if (errorData && errorData.detail) {
-            errorMsg = `Chyba při odesílání návrhu: ${errorData.detail}`;
-          }
-        } catch (e) {
-          // Keep the generic server error if JSON parsing fails
+        let errorMsg = responseData.detail || `Chyba serveru: ${response.status}`;
+        if (Array.isArray(responseData.detail) && responseData.detail.length > 0 && responseData.detail[0].msg) {
+           errorMsg = `Chyba validace: ${responseData.detail[0].msg} (pro pole: ${responseData.detail[0].loc?.join('->') || 'N/A'})`;
         }
         setCorrectionStatus(errorMsg);
       }
@@ -190,85 +214,11 @@ ${content.substring(0,100)}...`);
       setCorrectionStatus("Chyba sítě při odesílání návrhu.");
     } finally {
       setIsLoading(false);
-      handleCancelCorrection(); // Close editing UI
+      setEditingIssueIndex(null); // Ukončíme editaci po odeslání
+    setCorrectionSuggestion('');
+    setCorrectionComment('');
     }
   };
-
-
-  // Helper funkce pro formátování data a času
-  const formatFhirDateTime = (dateTimeString) => {
-    if (!dateTimeString) return 'N/A';
-    try {
-      // Zkusíme parsovat jako plné ISO datum a čas
-      const date = new Date(dateTimeString);
-      if (isNaN(date.getTime())) { // Pokud je neplatné, zkusíme jen jako datum (YYYY-MM-DD)
-          const parts = dateTimeString.split('-');
-          if (parts.length === 3) {
-              const year = parseInt(parts[0]);
-              const month = parseInt(parts[1]) -1; // Měsíce jsou 0-indexované v JS Date
-              const day = parseInt(parts[2]);
-              const simpleDate = new Date(year, month, day);
-               if (!isNaN(simpleDate.getTime())) {
-                   return simpleDate.toLocaleDateString('cs-CZ');
-               }
-          }
-          return dateTimeString; // Vrátit původní string, pokud ani to nepomůže
-      }
-      return date.toLocaleString('cs-CZ');
-    } catch (e) {
-      console.warn("Chyba při formátování data:", dateTimeString, e);
-      return dateTimeString; // V případě chyby vrátit původní řetězec
-    }
-  };
-
-  // Helper funkce pro formátování pohlaví
-  const formatGender = (genderCode) => {
-    if (!genderCode) return 'N/A';
-    switch (genderCode.toLowerCase()) {
-      case 'male':
-        return 'Muž';
-      case 'female':
-        return 'Žena';
-      case 'other':
-        return 'Jiné';
-      case 'unknown':
-        return 'Neznámé';
-      default:
-        return genderCode;
-    }
-  };
-
-  // Helper funkce pro nalezení rodného čísla
-  const findRodneCislo = (identifiers) => {
-    if (!identifiers || !Array.isArray(identifiers)) {
-      return 'N/A';
-    }
-    const rodneCisloIdentifier = identifiers.find(id => {
-      if (!id || !id.type) return false;
-
-      // Podmínka 1: identifier.type.text je "Rodné číslo"
-      const typeTextMatch = id.type.text === "Rodné číslo";
-
-      // Podmínka 2: identifier.type.coding[0].code je "NI"
-      const hasNICode = Array.isArray(id.type.coding) &&
-                        id.type.coding.some(coding => coding.code === "NI" && coding.system === "http://terminology.hl7.org/CodeSystem/v2-0203");
-
-      // Podmínka 3: identifier.system je "urn:oid:1.2.203.17.4.1"
-      const systemIsRCOID = id.system === "urn:oid:1.2.203.17.4.1";
-
-      // Pravidla dle zadání: ("Rodné číslo" OR NI) AND RČ OID
-      // Pokud je type.text "Rodné číslo", bereme to i když systém není RČ OID, ale preferujeme RČ OID
-      if (typeTextMatch && systemIsRCOID) return true;
-      if (hasNICode && systemIsRCOID) return true;
-      // Fallback pokud je text "Rodné číslo", ale systém nesedí nebo chybí - méně striktní
-      if (typeTextMatch && !systemIsRCOID) return true;
-
-      return false;
-    });
-
-    return rodneCisloIdentifier ? rodneCisloIdentifier.value : 'N/A';
-  };
-
 
   return (
     <div className="App">
@@ -278,206 +228,56 @@ ${content.substring(0,100)}...`);
         <p>Nahrajte .txt nebo obrázek (.png, .jpg, .jpeg).</p>
       </header>
       <main>
-        <section className="upload-section">
-          <h2>Nahrání dokumentu</h2>
-          <input type="file" accept=".txt,image/png,image/jpeg,image/jpg" onChange={handleFileChange} disabled={isLoading} />
-          {isLoading && <p className="loading-message">Zpracovávám soubor, prosím čekejte...</p>}
-          {error && <p className="error-message">{error}</p>}
-        </section>
+        <FileUploadSection
+          onFileChange={handleFileChange}
+          isLoading={isLoading}
+          selectedFile={selectedFile}
+        />
 
-        {selectedFile && !isLoading && (
-          <section className="file-info-section">
-            <h3>Informace o nahraném souboru:</h3>
-            <p><strong>Název:</strong> {selectedFile.name}</p>
-            <p><strong>Typ:</strong> {selectedFile.type}</p>
-            <p><strong>Velikost:</strong> {selectedFile.size} bytů</p>
+        {isLoading && <LoadingIndicator />}
+        {error && <ErrorMessage message={error} />}
+
+        {processingStatusText && !isLoading && (
+          <ProcessingInfo processingStatusText={processingStatusText} />
+        )}
+
+        {fhirOutput && !isLoading && (
+          <FhirResourceBundleDisplay fhirBundle={fhirOutput} />
+        )}
+
+        {/* Zobrazení DigiMedic statusu */}
+        {digimedicStatusMessage && !isLoading && (
+          <section className="digimedic-status-section info-section">
+            <h3>Stav odeslání na DigiMedic API:</h3>
+            <p className={
+              digimedicStatusMessage.toLowerCase().includes("chyba") ||
+              digimedicStatusMessage.toLowerCase().includes("selhalo") ||
+              digimedicStatusMessage.toLowerCase().includes("nepodařilo")
+              ? "status-message-error"
+              : digimedicStatusMessage.toLowerCase().includes("úspěšně")
+                ? "status-message-success"
+                : "status-message-info"
+            }>
+              {digimedicStatusMessage}
+            </p>
           </section>
         )}
 
-        {extractedTextFromBackend && !isLoading && (
-          <section className="extracted-text-section">
-            <h3>Stav zpracování souboru:</h3>
-            <pre>{extractedTextFromBackend}</pre>
-          </section>
-        )}
-
-        {fhirOutput && !isLoading && fhirOutput.entry && fhirOutput.entry.length > 0 ? (
-          <section className="fhir-output-section">
-            <h3>Strukturovaná FHIR Data (z Backendu):</h3>
-            {fhirOutput.entry.map((entry, index) => (
-              <div key={index} className="fhir-resource" style={{ marginBottom: '15px', padding: '10px', border: '1px solid #eee' }}>
-                {/* --- Zobrazení Pacienta --- */}
-                {entry.resource.resourceType === "Patient" && (
-                  <div className="patient-data">
-                    <h4>Pacient (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Jméno:</strong> {entry.resource.name?.[0]?.text || `${entry.resource.name?.[0]?.given?.join(' ') || ''} ${entry.resource.name?.[0]?.family || ''}`.trim() || 'N/A'}</p>
-                    <p><strong>Datum narození:</strong> {formatFhirDateTime(entry.resource.birthDate)}</p>
-                    <p><strong>Pohlaví:</strong> {formatGender(entry.resource.gender)}</p>
-                    <p><strong>Rodné číslo:</strong> {findRodneCislo(entry.resource.identifier)}</p>
-                  </div>
-                )}
-                {/* --- Zobrazení Pozorování (Krevní tlak) --- */}
-                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Krevní tlak" && (
-                  <div className="observation-data">
-                    <h4>Pozorování: Krevní tlak (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
-                    {
-                      (() => {
-                        const systolicComp = entry.resource.component?.find(comp => comp.code?.coding?.[0]?.code === "8480-6");
-                        const diastolicComp = entry.resource.component?.find(comp => comp.code?.coding?.[0]?.code === "8462-4");
-                        const renderedComponents = [];
-
-                        if (systolicComp) {
-                          renderedComponents.push(
-                            <p key="systolic"><strong>Systolický tlak:</strong> {systolicComp.valueQuantity?.value} {systolicComp.valueQuantity?.unit || 'N/A'}</p>
-                          );
-                        }
-                        if (diastolicComp) {
-                          renderedComponents.push(
-                            <p key="diastolic"><strong>Diastolický tlak:</strong> {diastolicComp.valueQuantity?.value} {diastolicComp.valueQuantity?.unit || 'N/A'}</p>
-                          );
-                        }
-                        if (renderedComponents.length === 0) {
-                           renderedComponents.push(<p key="no_bp_data">Specifické komponenty pro krevní tlak nebyly nalezeny.</p>);
-                        }
-                        return renderedComponents;
-                      })()
-                    }
-                  </div>
-                )}
-                {/* --- Zobrazení Pozorování (Pulz) --- */}
-                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Pulz" && (
-                  <div className="observation-data">
-                    <h4>Pozorování: Pulz (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
-                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
-                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
-                  </div>
-                )}
-                {/* --- Zobrazení Pozorování (Tělesná teplota) --- */}
-                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná teplota" && (
-                  <div className="observation-data">
-                    <h4>Pozorování: Tělesná teplota (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
-                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
-                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
-                  </div>
-                )}
-                {/* --- Zobrazení Pozorování (Tělesná výška) --- */}
-                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná výška" && (
-                  <div className="observation-data">
-                    <h4>Pozorování: Tělesná výška (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
-                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
-                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
-                  </div>
-                )}
-                {/* --- Zobrazení Pozorování (Tělesná hmotnost) --- */}
-                {entry.resource.resourceType === "Observation" && entry.resource.code?.text === "Tělesná hmotnost" && (
-                  <div className="observation-data">
-                    <h4>Pozorování: Tělesná hmotnost (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Datum a čas měření:</strong> {formatFhirDateTime(entry.resource.effectiveDateTime)}</p>
-                    <p><strong>Hodnota:</strong> {entry.resource.valueQuantity?.value || 'N/A'}</p>
-                    <p><strong>Jednotka:</strong> {entry.resource.valueQuantity?.unit || 'N/A'}</p>
-                  </div>
-                )}
-                {/* --- Zobrazení Diagnózy (Condition) --- */}
-                {entry.resource.resourceType === "Condition" && (
-                  <div className="condition-data">
-                    <h4>Diagnóza (ID: {entry.resource.id || 'N/A'})</h4>
-                    <p><strong>Text diagnózy:</strong> {entry.resource.code?.text || 'N/A'}</p>
-                    <p><strong>Datum záznamu:</strong> {formatFhirDateTime(entry.resource.recordedDate)}</p>
-                    <p><strong>Klinický stav:</strong> {entry.resource.clinicalStatus?.coding?.[0]?.display || entry.resource.clinicalStatus?.coding?.[0]?.code || 'N/A'}</p>
-                    <p><strong>Stav ověření:</strong> {entry.resource.verificationStatus?.coding?.[0]?.display || entry.resource.verificationStatus?.coding?.[0]?.code || 'N/A'}</p>
-                  </div>
-                )}
-                {/* --- Generické zobrazení pro ostatní typy zdrojů --- */}
-                {entry.resource.resourceType !== "Patient" &&
-                 !(entry.resource.resourceType === "Observation" &&
-                   (entry.resource.code?.text === "Krevní tlak" ||
-                    entry.resource.code?.text === "Pulz" ||
-                    entry.resource.code?.text === "Tělesná teplota" ||
-                    entry.resource.code?.text === "Tělesná výška" ||
-                    entry.resource.code?.text === "Tělesná hmotnost")) &&
-                 entry.resource.resourceType !== "Condition" && (
-                    <div>
-                        <h4>Resource: {entry.resource.resourceType} (ID: {entry.resource.id || 'N/A'}) - Obecné zobrazení</h4>
-                        <pre style={{maxHeight: '200px', overflowY: 'auto', backgroundColor: '#f5f5f5', border: '1px solid #ddd', padding: '5px'}}>
-                            {JSON.stringify(entry.resource, null, 2)}
-                        </pre>
-                    </div>
-                )}
-              </div>
-            ))}
-          </section>
-        ) : (
-          fhirOutput && !isLoading &&
-          <section className="fhir-output-section">
-            <h3>Strukturovaná FHIR Data (z Backendu):</h3>
-            <p>Žádná strukturovaná FHIR data nebyla vygenerována nebo nalezena z backendu pro nahraný soubor.</p>
-          </section>
-        )}
-
-        {/* Sekce pro zobrazení problémů s kvalitou */}
-        {!isLoading && selectedFile && qualityIssues !== undefined && (
-          <section className="quality-issues-section">
-            <h3>Problémy s kvalitou dat</h3>
-            {correctionStatus && (
-              <p
-                className="correction-status-message"
-                style={{ color: correctionStatus.startsWith('Chyba') ? 'red' : 'green', fontWeight: 'bold', marginBottom: '15px' }}
-              >
-                {correctionStatus}
-              </p>
-            )}
-            {qualityIssues.length > 0 ? (
-              qualityIssues.map((issue, index) => (
-                <div key={index} className={`quality-issue quality-issue-${issue.level?.toLowerCase() || 'info'}`}>
-                  <p><strong>Úroveň:</strong> {issue.level || 'N/A'}</p>
-                  <p><strong>Zpráva:</strong> {issue.message || 'N/A'}</p>
-                  {issue.field && <p><strong>Pole:</strong> {issue.field}</p>}
-                  {issue.value !== undefined && <p><strong>Hodnota:</strong> {String(issue.value)}</p>}
-
-                  {editingIssueIndex === index ? (
-                    <div className="correction-form" style={{ marginTop: '10px', marginBottom: '10px', padding: '10px', border: '1px dashed #999', backgroundColor: '#f9f9f9' }}>
-                      <label htmlFor={`suggestion-${index}`} style={{ display: 'block', marginBottom: '5px' }}>Navrhovaná korekce pro "{issue.field || 'pole'}":</label>
-                      <input
-                        id={`suggestion-${index}`}
-                        type="text"
-                        value={correctionSuggestion}
-                        onChange={handleSuggestionChange}
-                        style={{ marginRight: '10px', padding: '5px', border: '1px solid #ccc', borderRadius: '4px', width: 'calc(100% - 220px)' }}
-                      />
-                      <button
-                        onClick={() => handleSubmitCorrection(index)}
-                        disabled={isLoading}
-                        style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                      >
-                        {isLoading ? 'Odesílání...' : 'Odeslat návrh'}
-                      </button>
-                      <button
-                        onClick={handleCancelCorrection}
-                        disabled={isLoading}
-                        style={{ padding: '5px 10px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                      >
-                        Zrušit
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => handleStartCorrection(index)}
-                      disabled={isLoading || editingIssueIndex !== null} // Disable if another issue is being edited
-                      style={{ marginTop: '10px', padding: '5px 10px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                    >
-                      Navrhnout korekci
-                    </button>
-                  )}
-                </div>
-              ))
-            ) : (
-              <p>Nebyly nalezeny žádné problémy s kvalitou dat.</p>
-            )}
-          </section>
+        {/* Sekce pro Quality Issues se zobrazí vždy, pokud byl vybrán soubor a není loading */}
+        {!isLoading && selectedFile && (
+          <QualityIssuesSection
+            issues={qualityIssues}
+            correctionStatus={correctionStatus}
+            editingIssueIndex={editingIssueIndex}
+            correctionSuggestion={correctionSuggestion}
+            correctionComment={correctionComment} // Předání nového stavu
+            isLoading={isLoading}
+            onStartCorrection={handleStartCorrection}
+            onCancelCorrection={handleCancelCorrection}
+            onSuggestionChange={handleSuggestionChange}
+            onCorrectionCommentChange={handleCorrectionCommentChange} // Předání nového handleru
+            onSubmitCorrection={handleSubmitCorrection}
+          />
         )}
       </main>
       <footer className="App-footer">
