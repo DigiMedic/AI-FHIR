@@ -1,0 +1,112 @@
+## Analýza frontendového kódu (React)
+
+Toto zhodnocení se zaměřuje primárně na soubor `frontend/src/App.js`, který představuje hlavní komponentu a logiku aplikace.
+
+### 1. Celková struktura a organizace frontendového kódu
+
+*   **Struktura:** Aplikace je strukturována jako jednostránková aplikace (SPA) s jednou hlavní komponentou `App.js`, která spravuje veškerou logiku a zobrazení. Ostatní soubory v `frontend/src/` (`index.js`, `App.css`, `index.css`, `App.test.js`) plní standardní role v Create React App struktuře (vstupní bod, styly, testy).
+*   **Organizace v `App.js`:**
+    *   Komponenta `App` je funkční komponenta využívající React Hooks.
+    *   Na začátku jsou definovány všechny potřebné stavy pomocí `useState`.
+    *   Následují funkce pro obsluhu událostí (např. `handleFileChange`, `handleSubmitCorrection`) a pomocné formátovací funkce.
+    *   JSX kód je rozdělen do logických sekcí (`<header>`, `<main>`, `<footer>`) a dále na podsekce pro nahrávání, zobrazení informací o souboru, FHIR výstupu a problémů s kvalitou.
+*   **Modularita:** V současné podobě je veškerá funkcionalita soustředěna v `App.js`. Pro takto malou aplikaci to může být ještě přijatelné, ale s rostoucí komplexitou by bylo vhodné rozdělit UI a logiku do menších, znovupoužitelných komponent. Například:
+    *   `FileUploadForm` komponenta.
+    *   `FhirResultsDisplay` komponenta (která by mohla interně obsahovat další subkomponenty pro různé FHIR resource typy jako `PatientCard`, `ObservationCard` atd.).
+    *   `QualityIssuesList` komponenta.
+    *   `CorrectionForm` komponenta.
+
+### 2. Použití React best practices
+
+*   **Správa stavu:**
+    *   Stav je spravován pomocí `useState` hooku. Pro každý relevantní údaj (vybraný soubor, extrahovaný text, chyba, FHIR výstup, načítání, problémy s kvalitou, editace korekce) je použit samostatný stav, což je přehledné.
+    *   Resetování stavů (např. v `handleFileChange`) je prováděno korektně.
+
+*   **Props:** Komponenta `App` jako hlavní komponenta nepřijímá žádné props. Pokud by byla rozdělena na menší komponenty, props by hrály klíčovou roli v předávání dat a funkcí.
+
+*   **Hooks:**
+    *   `useState` je hojně a správně využíván pro správu lokálního stavu komponenty.
+    *   `useEffect` není explicitně použit, ale mohl by se hodit např. pro inicializaci některých dat při startu aplikace nebo pro sledování změn stavu a vyvolání vedlejších efektů (i když současná logika to explicitně nevyžaduje).
+
+*   **Stylování:**
+    *   Využívá se externí CSS soubor (`App.css`), což je standardní přístup.
+    *   V JSX jsou použity i inline styly (např. pro `fhir-resource`, `correction-form`, `correction-status-message`). Pro komplexnější stylování nebo dynamické styly by mohly být zváženy CSS-in-JS knihovny nebo CSS Modules, ale pro tento rozsah je současný přístup funkční. Třídy jako `quality-issue-${issue.level?.toLowerCase() || 'info'}` ukazují snahu o dynamické stylování na základě dat.
+
+*   **Komponenty:** Jak bylo zmíněno, aplikace by těžila z rozdělení na menší komponenty. To by zlepšilo znovupoužitelnost, testovatelnost a přehlednost kódu.
+
+### 3. Čitelnost kódu
+
+*   **Komentáře:**
+    *   Komponenta `App` má na začátku docstring, který popisuje její účel.
+    *   Inline komentáře jsou použity střídmě, ale na relevantních místech (např. vysvětlení fallbacku pro `fullUrl`).
+    *   Některé části kódu (např. logika renderování různých FHIR zdrojů) by mohly být ještě lépe okomentovány nebo rozděleny pro lepší srozumitelnost.
+
+*   **Názvy proměnných a funkcí:**
+    *   Názvy jsou obecně srozumitelné a popisné (např. `selectedFile`, `handleFileChange`, `fhirOutput`, `isLoading`).
+    *   Používají `camelCase`, což je standard v JavaScriptu.
+
+*   **Formátování JSX:**
+    *   JSX je relativně dobře formátováno a strukturováno.
+    *   Použití `className` pro stylování je správné.
+    *   Podmíněné renderování (např. `{isLoading && <p>...}` nebo `{fhirOutput && ... ? ... : ...}`) je použito efektivně.
+    *   Renderování seznamů (např. `fhirOutput.entry.map(...)`, `qualityIssues.map(...)`) používá `key` prop, což je důležité pro React.
+    *   Sekce pro renderování jednotlivých FHIR zdrojů (`Patient`, `Observation`, `Condition`) jsou poměrně rozsáhlé a obsahují vnořenou logiku pro přístup k datům. Toto je hlavní kandidát na refaktorizaci do samostatných komponent. Použití IIFE (`(() => { ... })()`) pro komplexnější renderovací logiku v rámci JSX (např. u komponent krevního tlaku) je funkční, ale může snižovat čitelnost.
+
+*   **Helper funkce:**
+    *   Funkce `formatFhirDateTime`, `formatGender`, `findRodneCislo` jsou definovány přímo v komponentě `App`. Jsou užitečné a dobře napsané. Pro větší aplikaci by bylo vhodné je přesunout do samostatného utility souboru (např. `utils.js` nebo `formatters.js`), aby byly znovupoužitelné i v jiných částech aplikace a aby se zmenšila velikost `App.js`.
+
+### 4. Způsob komunikace s backend API
+
+*   **Technologie:** Používá se standardní `fetch` API pro komunikaci s backendem.
+*   **Konstrukce požadavků:**
+    *   Pro nahrání souboru (`/api/process_document`) se správně používá `FormData` a metoda `POST`.
+    *   Pro odeslání návrhu korekce (`/api/suggest_correction`) se používá `POST` s `Content-Type: application/json` a `JSON.stringify()` pro tělo požadavku.
+*   **Ošetření odpovědí:**
+    *   Kontroluje se `response.ok` pro zjištění úspěšnosti HTTP požadavku.
+    *   Odpověď se parsuje jako JSON (`response.json()`).
+    *   V `handleFileChange` je kontrola na očekávanou strukturu odpovědi (`responseData.hasOwnProperty('fhir_resources')`).
+*   **Ošetření chyb:**
+    *   Používají se `try...catch` bloky pro zachycení chyb při síťové komunikaci nebo při zpracování odpovědi.
+    *   Chybové zprávy se nastavují do stavu `error` (pro `handleFileChange`) nebo `correctionStatus` (pro `handleSubmitCorrection`), které se pak zobrazují uživateli.
+    *   Je zde snaha parsovat chybová data z backendu (`errorData.detail`), což je dobrá praxe.
+*   **API URL:** URL adresa backendu (`http://localhost:8000/api/...`) je v kódu napevno. Pro produkční nasazení by měla být konfigurovatelná, např. pomocí proměnných prostředí.
+
+### 5. Správa stavu aplikace
+
+*   **Lokální stav komponenty:** Veškerý stav aplikace je spravován lokálně v komponentě `App` pomocí `useState`. To zahrnuje data formulářů, výsledky z API, stavy UI (načítání, chyby) atd.
+*   **Vhodnost pro daný rozsah:** Pro současnou velikost a komplexitu aplikace je tento přístup dostačující a přehledný.
+*   **Potenciál pro budoucí růst:** Pokud by se aplikace výrazně rozrostla a vyžadovala sdílení stavu mezi mnoha komponentami na různých úrovních hierarchie, bylo by vhodné zvážit pokročilejší řešení pro správu globálního stavu, jako je React Context API nebo knihovny typu Redux, Zustand či MobX. V současnosti to však není nutné.
+
+### 6. Případné zjevné problémy nebo oblasti ke zlepšení
+
+*   **Velikost a komplexita `App.js`:**
+    *   Jak již bylo zmíněno, soubor `App.js` je velmi rozsáhlý. Obsahuje veškerou UI logiku, správu stavu, API volání a formátování dat.
+    *   **Doporučení:** Rozdělit `App.js` na menší, specializované komponenty. Například:
+        *   `FileUpload`: Komponenta pro formulář nahrávání souboru.
+        *   `FileInfo`: Komponenta pro zobrazení informací o nahraném souboru.
+        *   `FhirResourceRenderer`: Hlavní komponenta pro zobrazení FHIR Bundle, která by dynamicky renderovala specifické subkomponenty (např. `PatientDisplay`, `ObservationDisplay`, `ConditionDisplay`) na základě `resourceType`.
+        *   `QualityIssueItem`: Komponenta pro zobrazení jednoho problému s kvalitou.
+        *   `CorrectionSuggestionForm`: Formulář pro zadání návrhu korekce.
+    *   Tím by se výrazně zlepšila čitelnost, udržovatelnost a testovatelnost jednotlivých částí.
+
+*   **Logika renderování FHIR zdrojů:**
+    *   Část JSX pro zobrazování FHIR dat je velmi dlouhá a obsahuje mnoho podmíněného renderování a přímého přístupu k vnořeným polím FHIR objektů (např. `entry.resource.name?.[0]?.text`).
+    *   **Doporučení:** Vytvořit pro každý typ FHIR zdroje (Patient, Observation, Condition atd.) samostatnou zobrazovací komponentu. Tato komponenta by přijímala daný FHIR resource jako prop a interně by řešila jeho zobrazení. Tím by se `App.js` zjednodušil a logika zobrazení by byla lépe zapouzdřená. Například `findRodneCislo` by patřilo spíše do komponenty zobrazující pacienta.
+
+*   **Pomocné funkce:**
+    *   Funkce jako `formatFhirDateTime`, `formatGender`, `findRodneCislo` by měly být přesunuty do samostatného utility souboru (např. `frontend/src/utils.js` nebo `frontend/src/helpers.js`), aby se snížila velikost `App.js` a podpořila znovupoužitelnost.
+
+*   **API URL konfigurace:**
+    *   URL backendu je napevno. Pro produkční nasazení je nutné toto řešit konfiguračně (např. přes proměnné prostředí a build proces).
+
+*   **Chybové hlášky a UI zpětná vazba:**
+    *   Základní ošetření chyb a zobrazení zpráv je implementováno. Mohlo by být rozšířeno o detailnější zpětnou vazbu nebo sofistikovanější systém notifikací.
+    *   Stav `isLoading` je použit pro zablokování tlačítka a zobrazení zprávy, což je dobré.
+
+*   **Konzistence v kvalitě kódu:** Kód je obecně dobře napsaný, ale refaktoringem by se mohla dále zvýšit jeho kvalita a čitelnost, zejména v oblasti renderování FHIR dat.
+
+*   **Resetování souboru v inputu:** `event.target.value = null;` ve `finally` bloku `handleFileChange` je dobrý trik, jak zajistit, že `onChange` se spustí i když uživatel vybere stejný soubor znovu.
+
+### Závěr
+
+Frontendová část aplikace v `App.js` je funkční a pokrývá všechny požadované scénáře. Používá moderní React (funkční komponenty, hooks) a základní best practices. Největším prostorem pro zlepšení je refaktorizace monolitické komponenty `App.js` do menších, lépe spravovatelných a znovupoužitelných komponent. Tím by se výrazně zlepšila čitelnost, udržovatelnost a testovatelnost kódu. Přesunutí pomocných funkcí a konfigurace API URL by také přispělo k čistší struktuře. Celkově je to dobrý základ pro další rozvoj.

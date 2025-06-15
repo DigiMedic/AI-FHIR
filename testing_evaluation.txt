@@ -1,0 +1,102 @@
+## Zhodnocení testů a testovací strategie
+
+Toto zhodnocení se zaměřuje na analýzu testovacích souborů pro backend a frontend projektu.
+
+### 1. Pokrytí backendu
+
+Backendové testy jsou umístěny v adresáři `backend/tests/` a používají `pytest` a `unittest.mock`.
+
+*   **`test_main.py` (Testy pro FastAPI endpointy a orchestraci):**
+    *   **Testované funkce/moduly:** Primárně testuje endpoint `/api/process_document` a `/api/suggest_correction` (i když pro `/api/suggest_correction` testy chybí, pouze v `test_main.py` je TODO komentář k jeho otestování, ale reálně testy pro něj nejsou implementovány). Testy se zaměřují na interakci s mockovanými službami (`extract_text_from_document`, `map_text_to_fhir`, `DigiMedicAPIClient`).
+    *   **Typ testů:** Jedná se převážně o integrační testy na úrovni HTTP API. Testují celý tok endpointu s izolovanými závislostmi. Test `test_process_image_document_actual_image` má charakter spíše end-to-end testu pro OCR část, jelikož nevolá mockovanou `extract_text_from_document` pro OCR.
+    *   **Detailnost a komplexnost:**
+        *   Pokryty jsou úspěšné scénáře pro `.txt` i `.png` soubory.
+        *   Testuje se ošetření nepodporovaného typu souboru (HTTP 400).
+        *   Jsou testovány scénáře, kdy extrakce textu selže (vrátí chybový string z OCR nebo `None`) nebo kdy `map_text_to_fhir` nevrátí žádné zdroje.
+        *   Testuje se logování `quality_issues` (pomocí `capsys` fixture).
+        *   Je testován případ selhání `DigiMedicAPIClient.send_fhir_bundle()`.
+        *   Použití `unittest.mock.patch` pro mockování závislostí je správné. `TestClient` z FastAPI se používá pro volání endpointů.
+    *   **Nedostatky:** Chybí explicitní testy pro endpoint `/api/suggest_correction`. Testování logování chyb API klienta je naznačeno, ale spoléhá na `capsys`, což nemusí být ideální pro `stderr`.
+
+*   **`test_fhir_mapper.py` (Testy pro logiku mapování na FHIR):**
+    *   **Testované funkce/moduly:** Tento soubor obsahuje nejvíce testů a zaměřuje se na klíčové funkce z `fhir_mapper.py`:
+        *   `parse_date_to_fhir_format`: Velmi dobře testováno pomocí `@pytest.mark.parametrize` pro mnoho validních i invalidních vstupů.
+        *   `extract_info_from_birth_number` a `is_valid_birth_number`: Dobře pokryto různými formáty RČ, validními i nevalidními, včetně kontroly generovaných `quality_issues`.
+        *   `create_fhir_*_resource` funkce (pro Patient, Observation - BP, Pulse, Temperature, Height, Weight, Condition): Testováno pro validní data, chybějící data, hodnoty mimo rozsah (pro vitální funkce) a nesoulad dat (RČ vs. datum narození).
+        *   `map_text_to_fhir`: Základní testy pro komplexnější scénáře, včetně generování `quality_issues` a kontroly výstupních FHIR zdrojů.
+        *   `extract_value_and_unit_from_nlp_entity_text`: Testováno s různými vstupy entity a okolního textu pro extrakci hodnoty a jednotky.
+        *   Parsovací funkce (`parse_patient_data`, `parse_observation_data`, `parse_condition_data`, `parse_vital_signs_data`): Testovány s ohledem na NLP vstupy (pomocí mockovaných NLP entit) a jejich interakci s logikou hledání klíčových slov a extrakce.
+    *   **Typ testů:** Jedná se o jednotkové testy.
+    *   **Detailnost a komplexnost:** Testy jsou velmi detailní a komplexní, zejména pro funkce parsování data a validace RČ. Použití `@pytest.mark.parametrize` činí testy čitelnými a snadno rozšiřitelnými. Dobře pokrývají různé scénáře, včetně okrajových a chybových stavů.
+    *   **NLP a FHIR mapování:** Základní logika NLP (výběr správné entity na základě kontextu klíčových slov) je testována v `TestParsePatientDataNLPContext` a `TestParseConditionDataNLPContext`. Testy pro `map_text_to_fhir` pokrývají základní scénáře, ale vzhledem ke komplexitě mapování by mohly být ještě rozšířeny o další komplexní textové vstupy a variace NLP entit.
+
+*   **`test_text_extractor.py` (Testy pro extrakci textu a NLP/OCR):**
+    *   **Testované funkce/moduly:** Testuje funkci `extract_text_from_document`.
+    *   **Typ testů:** Jednotkové testy.
+    *   **Detailnost a komplexnost:**
+        *   Testuje non-NLP extrakci textu a různé případy čištění (mezery, nové řádky).
+        *   Simuluje nedostupnost knihoven Pytesseract a Pillow a ověřuje správné chybové hlášky.
+        *   Testuje případ, kdy Stanza není dostupná (vyvolání `RuntimeError`).
+        *   Testuje fallback na non-NLP zpracování, pokud inicializace Stanza pipeline selže (s mockovanou Stanza).
+        *   Testuje úspěšnou NLP extrakci s mockovanou Stanza pipeline (`mock_stanza_pipeline` fixture) pro různé scénáře (extrakce jména, data, více entit, žádné entity). Ověřuje se i volání Stanza pipeline se správně očištěným textem.
+        *   Testuje fallback na non-NLP, pokud je použit nepodporovaný NLP engine.
+        *   Mockuje `pytesseract` a `Image.open` pro testování OCR extrakce, včetně chybových stavů (Tesseract nenalezen, obecná chyba OCR).
+        *   Testuje případ, kdy obrázkový soubor pro OCR neexistuje.
+    *   **NLP extrakce:** Mockování Stanza pipeline je provedeno dobře a umožňuje testovat logiku `text_extractor.py` nezávisle na skutečném Stanza modelu.
+
+*   **`test_digimedic_api_client.py` (Testy pro API klienta):**
+    *   **Testované funkce/moduly:** Testuje třídu `DigiMedicAPIClient`.
+    *   **Typ testů:** Jednotkové testy.
+    *   **Detailnost a komplexnost:**
+        *   Testuje simulovaný režim pro `send_fhir_resource` i `send_fhir_bundle` a ověřuje logování (pomocí `capsys`).
+        *   Pro reálný režim mockuje modul `requests`:
+            *   Testuje úspěšné odeslání resource (PUT i POST) a bundle.
+            *   Testuje specifický případ odpovědi 204 No Content.
+            *   Testuje různé HTTP chyby (400 s OperationOutcome, 500 s textovou odpovědí).
+            *   Testuje síťové výjimky (`requests.exceptions.Timeout`, `requests.exceptions.RequestException`).
+        *   Testuje různé způsoby konfigurace klienta (argumenty konstruktoru, proměnné prostředí, priority, fallback na simulované hodnoty s varováním).
+    *   Testy jsou dobře strukturované a pokrývají širokou škálu scénářů interakce s API.
+
+### 2. Pokrytí frontendu (`frontend/src/App.test.js`)
+
+*   **Testovaný soubor:** `App.test.js` testuje hlavní komponentu `App`.
+*   **Typ testů:** Využívá `@testing-library/react` pro testování React komponent. Jde o kombinaci:
+    *   **Renderovacích testů:** Ověřuje, že se základní UI prvky (nadpisy, texty, input pro soubor) správně zobrazí při prvním renderu.
+    *   **Testů interakcí/funkcionality:**
+        *   Testuje výběr souboru a zobrazení informací o něm.
+        *   Mockuje globální `fetch` pomocí `jest.fn()` a `jest.spyOn(global, 'fetch')`.
+        *   Testuje zobrazení chybové hlášky při selhání API volání.
+        *   Testuje úspěšné zpracování dat z API a zobrazení FHIR zdrojů (Patient, Observation) a jejich klíčových atributů.
+        *   Testuje zobrazení `quality_issues`, pokud jsou přítomny v odpovědi z API.
+*   **Detailnost a komplexnost:**
+    *   Testy pokrývají základní šťastné scénáře i některé chybové stavy.
+    *   Použití `fireEvent` pro simulaci uživatelských interakcí (výběr souboru) je správné.
+    *   Použití `waitFor` pro asynchronní operace (čekání na odpověď z API) je také správné.
+    *   Mockování `fetch` je klíčové pro izolaci frontendových testů od backendu.
+    *   Helper funkce `createMockFile` je užitečná pro vytváření testovacích souborů.
+*   **Chybějící testy interakcí:**
+    *   Nejsou zde testy pro nově přidanou funkcionalitu navrhování korekcí (vyplnění formuláře, odeslání, zobrazení stavové zprávy).
+    *   Testy pro zobrazení různých typů FHIR zdrojů by mohly být detailnější (např. ověření všech polí pro Condition, různé typy Observation).
+*   **Další komponenty:** Jelikož `App.js` je jedinou hlavní komponentou, nejsou testy pro jiné specifické komponenty (protože nebyly identifikovány jako samostatné funkční celky).
+
+### 3. Celková strategie
+
+*   **Úroveň pokrytí:**
+    *   **Backend:** Zdá se, že backend má relativně vysokou úroveň pokrytí jednotkovými testy, zejména pro `fhir_mapper.py` a `digimedic_api_client.py`. `test_main.py` poskytuje dobré integrační testy pro API endpointy. `test_text_extractor.py` dobře pokrývá logiku extrakce včetně NLP a OCR s mockováním. Celkově je pokrytí backendu na dobré úrovni.
+    *   **Frontend:** `App.test.js` pokrývá základní funkcionalitu hlavní komponenty. Pokrytí by mohlo být vylepšeno testováním interakcí s formulářem pro korekce a detailnějším testováním zobrazení různých FHIR zdrojů.
+*   **Struktura a udržovatelnost testů:**
+    *   **Backend:** Testy jsou dobře strukturované, využívají `pytest` features jako fixtures (`client`, `mock_stanza_pipeline`) a parametrizaci, což zvyšuje jejich čitelnost a udržovatelnost. Názvy testovacích funkcí jsou popisné.
+    *   **Frontend:** Testy v `App.test.js` jsou organizovány v `describe` bloku a používají standardní postupy z `@testing-library/react`. Jsou čitelné.
+*   **Zjevné mezery v testování:**
+    *   **Backend:**
+        *   Chybí testy pro endpoint `/api/suggest_correction` v `test_main.py`.
+        *   Některé komplexní scénáře v `map_text_to_fhir` by mohly být přidány, např. s různými kombinacemi NLP entit a textu.
+        *   Testování logiky, která rozhoduje, zda se má použít NLP nebo jen OCR na základě typu souboru a následné předání dat do `map_text_to_fhir`, by mohlo být explicitnější v `test_main.py`.
+    *   **Frontend:**
+        *   Chybí testy pro funkcionalitu navrhování korekcí (`handleStartCorrection`, `handleSubmitCorrection` atd.).
+        *   Detailnější testy pro renderování všech podporovaných FHIR zdrojů a jejich variant.
+        *   Testování chování UI při různých stavech `isLoading`.
+
+### Závěr k testování
+
+Projekt má solidní základnu testů, zejména na straně backendu. Použití `pytest` s jeho pokročilými funkcemi a `unittest.mock` pro backend, a `@testing-library/react` s `jest` pro frontend, odpovídá moderním postupům. Hlavní mezery jsou v testování endpointu pro návrhy korekcí na backendu a odpovídající funkcionality na frontendu. Rozšíření testů o tyto oblasti a detailnější testování některých komplexních scénářů by dále zvýšilo robustnost aplikace. Celkově je však vidět snaha o kvalitní testování.

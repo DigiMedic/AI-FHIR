@@ -1,0 +1,131 @@
+## Analýza backendového kódu
+
+Toto zhodnocení se zaměřuje na soubory: `main.py`, `fhir_mapper.py`, `ai_models/text_extractor.py` a `digimedic_api_client.py`.
+
+### 1. Celková struktura a organizace backendového kódu
+
+*   **Rozdělení logiky:** Kód je rozdělen do čtyř hlavních souborů, což je pro daný rozsah projektu přiměřené:
+    *   `main.py`: Obsahuje FastAPI aplikaci, definice endpointů a základní orchestraci zpracování dokumentů.
+    *   `fhir_mapper.py`: Zodpovídá za komplexní logiku parsování textu (pomocí regulárních výrazů a NLP entit) a transformaci extrahovaných dat na FHIR zdroje. Tento soubor je poměrně rozsáhlý.
+    *   `ai_models/text_extractor.py`: Zapouzdřuje funkce pro extrakci textu, včetně OCR z obrázků a zpracování textu pomocí NLP (Stanza).
+    *   `digimedic_api_client.py`: Implementuje klienta pro komunikaci s externím (simulovaným) DigiMedic API.
+
+*   **Modularita:** Rozdělení podporuje modularitu. Každý soubor má relativně jasně definovanou zodpovědnost. `fhir_mapper.py` je klíčovou komponentou s největší komplexitou.
+
+*   **Importy a závislosti:**
+    *   Importy jsou většinou dobře strukturované. V `main.py` je použit `sys.path.insert` pro umožnění importů z `backend` adresáře, což je běžný, i když někdy diskutabilní, přístup pro projekty, které nejsou plně strukturovány jako balíčky. Alternativou by mohlo být spouštění `uvicorn` z adresáře `backend` nebo lepší konfigurace `PYTHONPATH`.
+    *   Je zde pokus o relativní importy (`from .fhir_mapper import ...`) jako fallback, což je dobrá praxe.
+    *   Závislost `main.py` na ostatních modulech je zřejmá a logická. `fhir_mapper.py` je soběstačný, kromě standardních knihoven a `uuid`, `unicodedata`. `text_extractor.py` závisí na externích knihovnách (Pillow, Pytesseract, Stanza). `digimedic_api_client.py` závisí na `requests`.
+
+### 2. Čitelnost kódu a dodržování Python best practices
+
+*   **PEP 8:**
+    *   **Odsazení:** Většinou konzistentní (4 mezery).
+    *   **Délka řádků:** Některé řádky (zejména v `fhir_mapper.py` u regulárních výrazů a definic FHIR zdrojů) přesahují doporučenou délku 79/99 znaků. To je u regexů a datových struktur někdy tolerováno, ale mohlo by být zlepšeno formátováním.
+    *   **Pojmenování:** Názvy proměnných a funkcí jsou převážně v `snake_case`, názvy tříd v `PascalCase`, což odpovídá PEP 8. Některé názvy jsou české (`text_k_parsovani_regexem`, `datum_narozeni_regex`, atd.), což může být pro někoho méně obvyklé v Python komunitě, ale pokud je to konzistentní v rámci projektu a týmu, je to akceptovatelné. Anglické názvy by zlepšily univerzálnost.
+    *   **Prázdné řádky:** Použití prázdných řádků pro oddělení logických bloků je obecně dobré, místy by mohlo být ještě konzistentnější.
+
+*   **Komentáře:**
+    *   **Docstringy:** Většina funkcí, zejména v `fhir_mapper.py` a `main.py`, má docstringy. Jejich kvalita a detailnost se liší. Některé jsou velmi dobré a popisné (např. `parse_date_to_fhir_format`), jiné by mohly být detailnější (např. popis argumentů a návratových hodnot u některých parserů v `fhir_mapper.py`). V `text_extractor.py` a `digimedic_api_client.py` jsou docstringy také přítomny.
+    *   **Inline komentáře:** Používány střídmě, většinou tam, kde je to účelné pro vysvětlení složitějších kroků (např. u regexů nebo specifických logických rozhodnutí). Místy jsou komentáře jako `# print(...)`, což by mělo být odstraněno v produkčním kódu.
+
+*   **Názvy proměnných a funkcí:**
+    *   Jak bylo zmíněno, kombinace češtiny a angličtiny. České názvy jsou srozumitelné v kontextu, ale anglické by byly standardnější.
+    *   Některé názvy jsou velmi dlouhé (např. `extract_value_and_unit_from_nlp_entity_text`), což je sice popisné, ale může snižovat čitelnost v komplexních výrazech.
+
+*   **Typování (Type Hinting):**
+    *   Typové anotace jsou použity ve velké části kódu, což je velmi pozitivní a výrazně zlepšuje čitelnost a udržovatelnost.
+    *   Použití `Optional`, `Union`, `List`, `Dict`, `Any` je adekvátní.
+    *   Konzistence je dobrá.
+
+### 3. Způsob ošetření chyb
+
+*   **`try-except` bloky:**
+    *   Používány na mnoha místech, zejména v `main.py` (ošetření endpointů), `fhir_mapper.py` (při parsování a transformacích) a `text_extractor.py` (při práci s externími knihovnami a soubory).
+    *   V `main.py` je obecný `except Exception as e:` pro zachycení neočekávaných chyb v endpointu, což je dobré pro zabránění pádu aplikace, ale loguje se traceback, což je klíčové pro diagnostiku.
+    *   V `fhir_mapper.py` jsou často specifické výjimky (např. `ValueError`, `IndexError`) zachytávány při parsování, což je dobrá praxe. Problémy s kvalitou jsou často přidávány do `quality_issues_list` namísto vyvolání výjimky, což umožňuje pokračovat ve zpracování a agregovat problémy.
+    *   V `text_extractor.py` jsou zachytávány `ImportError`, `RuntimeError` a obecné `Exception` při práci se Stanza a Pytesseract.
+
+*   **Typy vyvolávaných výjimek:**
+    *   V `main.py` jsou vyvolávány `HTTPException` pro komunikaci chyb klientovi, což je správný přístup pro FastAPI.
+    *   Interně moduly většinou nešíří výjimky výše, ale spíše je logují nebo zaznamenávají jako "quality issues".
+
+*   **Logování chyb:**
+    *   Chyby jsou často logovány pomocí `print(f"CHYBA: ...", file=sys.stderr)` nebo `print(f"VAROVÁNÍ: ...")`. V `main.py` se pro neočekávané chyby loguje i `traceback.format_exc()`.
+    *   Použití standardního `logging` modulu by bylo systematičtější (viz bod 4).
+
+### 4. Přítomnost a úroveň logování
+
+*   **Použití `print()` vs. `logging`:**
+    *   Převažuje použití `print()` pro logování DEBUG, INFO, WARNING i ERROR zpráv. To je méně flexibilní než standardní `logging` modul, který umožňuje lepší konfiguraci úrovní logování, formátů a cílů (soubor, konzole, atd.).
+    *   V `text_extractor.py` a `digimedic_api_client.py` jsou také použity `print()`.
+
+*   **Logované informace:**
+    *   Loguje se poměrně velké množství informací, včetně DEBUG zpráv o průběhu extrakce a mapování. To je užitečné pro vývoj a ladění.
+    *   Logují se chyby, varování a některé informační zprávy. V `main.py` se logují i `quality_issues` a komunikace s DigiMedic API.
+    *   V `digimedic_api_client.py` se loguje (maskovaný) autentizační token při inicializaci, což je dobré pro ověření konfigurace, ale je třeba dbát na to, aby plný token nikdy neunikl do logů v produkci.
+
+*   **Úroveň detailů:**
+    *   Logování je často detailní, což pomáhá sledovat tok dat a identifikovat problémy. Například v `fhir_mapper.py` jsou DEBUG zprávy o tom, která entita byla nalezena, jakým způsobem (NLP/Regex) a jaká hodnota byla extrahována.
+    *   Logování `quality_issues` ve formátu JSON v `main.py` je dobrý nápad pro strukturovaný záznam problémů.
+
+*   **Citlivé informace:**
+    *   Jak zmíněno, API token v `digimedic_api_client.py` je logován maskovaně.
+    *   Obsah zpracovávaných dokumentů nebo extrahované osobní údaje (jména, RČ) se mohou objevit v DEBUG logů. Pro produkční nasazení by bylo vhodné revidovat, jaké detaily se logují na jaké úrovni, aby se zabránilo úniku citlivých dat do logů (např. DEBUG logy by neměly být aktivní v produkci, nebo by měly být filtrovány).
+
+### 5. Případné zjevné problémy nebo oblasti ke zlepšení
+
+*   **`fhir_mapper.py` rozsáhlost:** Tento soubor je velmi dlouhý (přes 1000 řádků) a obsahuje mnoho funkcí a regexů. Ačkoliv je interně strukturovaný, jeho rozdělení na menší, specializovanější moduly (např. modul pro parsování demografie, modul pro vitální funkce, modul pro tvorbu FHIR zdrojů) by mohlo zlepšit přehlednost a udržovatelnost.
+    *   Například sekce s regulárními výrazy by mohla být v samostatném konfiguračním souboru nebo modulu.
+    *   Funkce pro tvorbu jednotlivých FHIR zdrojů (`create_fhir_patient_resource`, `create_fhir_observation_bp_resource` atd.) by mohly být ve vlastním modulu "fhir_builders" nebo podobně.
+
+*   **Použití `print()` pro logování:** Důrazně doporučeno přejít na standardní `logging` modul. To umožní:
+    *   Nastavení různých úrovní logování (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    *   Snadné přepínání výstupu logů (konzole, soubor).
+    *   Formátování logovacích zpráv.
+    *   Možnost filtrování logů.
+
+*   **Správa Stanza pipeline v `text_extractor.py`:**
+    *   Pipeline se inicializuje při prvním volání `get_stanza_pipeline()`. To je v pořádku, ale při běhu ve FastAPI (které může používat více workerů) by to mohlo vést k inicializaci pipeline v každém workeru zvlášť, což zvyšuje paměťovou náročnost.
+    *   Pro produkční nasazení FastAPI se doporučuje inicializovat takovéto modely při startu aplikace (např. pomocí `lifespan` eventů ve FastAPI) a sdílet je mezi workery, pokud to knihovna umožňuje, nebo zajistit, aby každý worker měl svou instanci efektivně. Stanza pipeline typicky není thread-safe pro zápis, ale měla by být pro čtení.
+
+*   **Konfigurace:**
+    *   `TEMP_UPLOAD_DIR` je definován přímo v `main.py`. Pro lepší flexibilitu by mohla být cesta konfigurovatelná (např. přes proměnné prostředí).
+    *   API token a URL pro `DigiMedicAPIClient` jsou částečně konfigurovatelné přes proměnné prostředí, což je dobře.
+
+*   **Testovatelnost:**
+    *   Většina funkcí v `fhir_mapper.py` je čistých (vrací výsledek na základě vstupu), což usnadňuje jejich testování.
+    *   Funkce provádějící I/O (např. v `main.py` práce se soubory, v `text_extractor.py` OCR) by vyžadovaly mockování pro jednotkové testy.
+    *   Přítomnost `if __name__ == '__main__':` bloků s testovacími příklady v `fhir_mapper.py` a `text_extractor.py` je dobrým základem, ale pro systematické testování by byly vhodnější dedikované testovací frameworky (např. `pytest`).
+
+*   **Regex vs. NLP:**
+    *   Kód kombinuje regex a NLP (Stanza) pro extrakci dat, což je robustní přístup. Regexy slouží jako fallback nebo pro specifické vzory.
+    *   Logika výběru mezi NLP a regex výsledky, a jak se kombinují (např. v `parse_patient_data`), je poměrně komplexní a mohla by být zjednodušena nebo lépe zdokumentována. Funkce jako `find_nlp_entities_near_keyword` a `extract_value_and_unit_from_nlp_entity_text` jsou pokročilé a ukazují snahu o sofistikovanou extrakci.
+
+*   **Bezpečnost:**
+    *   Nahrávání souborů: V `main.py` se generují unikátní názvy souborů pomocí `uuid.uuid4()`, což je dobré pro prevenci přepsání souborů nebo path traversal útoků (i když samotná cesta je pevně daná). Dočasné soubory se mažou ve `finally` bloku.
+    *   Kontrola typu souboru (`file.content_type`) je základní ochranou.
+    *   Použití `os.system` v `text_extractor.py` (v `if __name__ == '__main__':` bloku pro generování testovacího obrázku) je obecně nedoporučované kvůli bezpečnostním rizikům; pro testy je to méně kritické, ale v produkčním kódu by se nemělo objevovat.
+
+*   **Chybová hlášení a `quality_issues`:**
+    *   Systém `quality_issues` je dobrý způsob, jak shromažďovat informace o problémech s daty bez přerušení celého procesu.
+    *   Úrovně (`error`, `warning`, `info`) jsou používány, což pomáhá prioritizovat problémy.
+
+*   **Kód v `if __name__ == '__main__':` blocích:**
+    *   Obsahuje užitečné testovací scénáře. Tyto by mohly být formalizovány do jednotkových testů.
+
+### Závěr
+
+Kód je funkčně bohatý a snaží se řešit komplexní problém extrakce dat z nestrukturovaných nebo semi-strukturovaných textů a jejich mapování na FHIR. Použití FastAPI, typových anotací a snaha o modularitu jsou pozitivní.
+
+Hlavní oblasti pro zlepšení zahrnují:
+1.  **Refaktorizaci `fhir_mapper.py`** na menší, lépe spravovatelné moduly.
+2.  **Implementaci standardního `logging` modulu** namísto `print()`.
+3.  **Optimalizaci správy NLP pipeline** pro produkční nasazení ve FastAPI.
+4.  **Zlepšení konfigurace** (např. cesty, citlivá data) pomocí proměnných prostředí nebo konfiguračních souborů.
+5.  **Posílení testování** pomocí dedikovaného frameworku.
+6.  Konzistentní používání anglických názvů pro proměnné a funkce by zlepšilo univerzální srozumitelnost.
+
+Celkově jde o solidní základ, který demonstruje hluboké porozumění problému. Navrhovaná vylepšení by pomohla zvýšit robustnost, udržovatelnost a škálovatelnost aplikace.Analýza byla úspěšně uložena do souboru `backend_analysis.txt`.
+
+Tímto je můj aktuální podúkol splněn.
