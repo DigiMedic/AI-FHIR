@@ -21,10 +21,7 @@ function App() {
   const [fhirOutput, setFhirOutput] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [qualityIssues, setQualityIssues] = useState([]);
-  const [editingIssueIndex, setEditingIssueIndex] = useState(null);
-  const [correctionSuggestion, setCorrectionSuggestion] = useState('');
-  const [correctionComment, setCorrectionComment] = useState('');
-  const [correctionStatus, setCorrectionStatus] = useState('');
+  // ODEBRÁNO: editingIssueIndex, correctionSuggestion, correctionComment, correctionStatus
   const [digimedicStatusMessage, setDigimedicStatusMessage] = useState(''); // Nový stav
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -36,10 +33,7 @@ function App() {
     setFhirOutput(null);
     setQualityIssues([]);
     setSelectedFile(null);
-    setEditingIssueIndex(null);
-    setCorrectionSuggestion('');
-    setCorrectionComment(''); // Již zde bylo z předchozího kroku
-    setCorrectionStatus('');
+    // ODEBRÁNO: setEditingIssueIndex, setCorrectionSuggestion, setCorrectionComment, setCorrectionStatus
     setDigimedicStatusMessage(''); // Reset DigiMedic statusu
 
     if (!file) {
@@ -147,78 +141,7 @@ ${content.substring(0,100)}...`);
     }
   };
 
-  const handleStartCorrection = (index) => {
-    setEditingIssueIndex(index);
-    const issueValue = qualityIssues[index]?.value;
-    setCorrectionSuggestion(issueValue !== undefined && issueValue !== null ? String(issueValue) : '');
-    setCorrectionComment(''); // Reset komentáře při otevření nového formuláře
-    setCorrectionStatus('');
-  };
-
-  const handleCancelCorrection = () => {
-    setEditingIssueIndex(null);
-    setCorrectionSuggestion('');
-    setCorrectionComment(''); // Reset komentáře
-  };
-
-  const handleSuggestionChange = (event) => {
-    setCorrectionSuggestion(event.target.value);
-  };
-
-  const handleCorrectionCommentChange = (event) => { // Nový handler
-    setCorrectionComment(event.target.value);
-  };
-
-  const handleSubmitCorrection = async (index) => {
-    const originalIssue = qualityIssues[index];
-    if (!originalIssue) {
-      setCorrectionStatus("Chyba: Původní problém s kvalitou nenalezen.");
-      return;
-    }
-
-    const payload = {
-      originalIssue: { // Struktura dle Pydantic modelu na backendu
-        level: originalIssue.level,
-        message: originalIssue.message,
-        field: originalIssue.field || originalIssue.path, // Použijeme 'path', pokud 'field' není
-        value: originalIssue.value !== undefined ? String(originalIssue.value) : null
-      },
-      suggestedValue: correctionSuggestion,
-      fileName: selectedFile ? selectedFile.name : 'N/A',
-      comment: correctionComment // Přidání komentáře do payloadu
-    };
-
-    setIsLoading(true);
-    setCorrectionStatus('');
-
-    try {
-      const response = await fetch(`${API_URL}/api/suggest_correction`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const responseData = await response.json(); // Zkusíme parsovat JSON vždy
-
-      if (response.ok) {
-        setCorrectionStatus(responseData.message || "Návrh úspěšně odeslán.");
-      } else {
-        let errorMsg = responseData.detail || `Chyba serveru: ${response.status}`;
-        if (Array.isArray(responseData.detail) && responseData.detail.length > 0 && responseData.detail[0].msg) {
-           errorMsg = `Chyba validace: ${responseData.detail[0].msg} (pro pole: ${responseData.detail[0].loc?.join('->') || 'N/A'})`;
-        }
-        setCorrectionStatus(errorMsg);
-      }
-    } catch (networkError) {
-      console.error("Network error submitting correction:", networkError);
-      setCorrectionStatus("Chyba sítě při odesílání návrhu.");
-    } finally {
-      setIsLoading(false);
-      setEditingIssueIndex(null); // Ukončíme editaci po odeslání
-    setCorrectionSuggestion('');
-    setCorrectionComment('');
-    }
-  };
+  // ODEBRÁNO: handleStartCorrection, handleCancelCorrection, handleSuggestionChange, handleCorrectionCommentChange, handleSubmitCorrection
 
   return (
     <div className="App">
@@ -267,16 +190,13 @@ ${content.substring(0,100)}...`);
         {!isLoading && selectedFile && (
           <QualityIssuesSection
             issues={qualityIssues}
-            correctionStatus={correctionStatus}
-            editingIssueIndex={editingIssueIndex}
-            correctionSuggestion={correctionSuggestion}
-            correctionComment={correctionComment} // Předání nového stavu
+            // ODEBRÁNY propy: correctionStatus, editingIssueIndex, correctionSuggestion, correctionComment,
+            // onStartCorrection, onCancelCorrection, onSuggestionChange, onCorrectionCommentChange, onSubmitCorrection
+            // PŘIDÁNY propy:
+            selectedFile={selectedFile}
+            API_URL={API_URL}
             isLoading={isLoading}
-            onStartCorrection={handleStartCorrection}
-            onCancelCorrection={handleCancelCorrection}
-            onSuggestionChange={handleSuggestionChange}
-            onCorrectionCommentChange={handleCorrectionCommentChange} // Předání nového handleru
-            onSubmitCorrection={handleSubmitCorrection}
+            setIsLoading={setIsLoading}
           />
         )}
       </main>

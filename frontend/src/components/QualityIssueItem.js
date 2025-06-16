@@ -1,6 +1,8 @@
 // frontend/src/components/QualityIssueItem.js
 import React from 'react';
 import CorrectionForm from './CorrectionForm'; // Bude potřeba pro zobrazení formuláře
+// Předpokládáme, že App.css je importován globálně v App.js nebo index.js
+// Pokud ne, odkomentujte: import './QualityIssueItem.css'; nebo '../App.css';
 
 const QualityIssueItem = ({
   issue,
@@ -11,29 +13,48 @@ const QualityIssueItem = ({
   isLoading,
   // Props pro CorrectionForm, pokud je zobrazen
   correctionSuggestion,
-  correctionComment, // Nová prop
+  correctionComment,
   onSuggestionChange,
-  onCorrectionCommentChange, // Nová prop
+  onCorrectionCommentChange,
   onSubmitCorrection,
   onCancelCorrection
 }) => {
   if (!issue) return null;
 
+  const getIssueLevelModifierClass = (level) => {
+    if (!level) return 'quality-issue-item--info'; // Default
+    switch (level.toLowerCase()) {
+      case 'critical': // Přidáno 'critical' pro mapování na error
+      case 'error':
+        return 'quality-issue-item--error';
+      case 'warning':
+        return 'quality-issue-item--warning';
+      case 'info':
+      default:
+        return 'quality-issue-item--info';
+    }
+  };
+
+  const fieldDisplay = issue.field || issue.path || 'N/A';
+  const valueDisplay = issue.value !== undefined && issue.value !== null ? String(issue.value) : 'N/A';
+  const messageDisplay = issue.message || 'Neznámý problém';
+  const levelDisplay = issue.level || 'Info';
+
   return (
-    <div className={`quality-issue quality-issue-${issue.level?.toLowerCase() || 'info'}`}>
-      <p><strong>Úroveň:</strong> {issue.level || 'N/A'}</p>
-      <p><strong>Zpráva:</strong> {issue.message || 'N/A'}</p>
-      {(issue.field || issue.path) && <p><strong>Pole/Cesta:</strong> {issue.field || issue.path}</p>}
-      {issue.value !== undefined && <p><strong>Hodnota:</strong> {String(issue.value)}</p>}
+    <div className={`quality-issue-item ${getIssueLevelModifierClass(issue.level)}`}>
+      <p><strong>Problém:</strong> {messageDisplay}</p>
+      <p><strong>Pole:</strong> {fieldDisplay}</p>
+      <p><strong>Původní hodnota:</strong> {valueDisplay}</p>
+      <p><strong>Úroveň:</strong> {levelDisplay}</p>
 
       {isEditingThisIssue ? (
         <CorrectionForm
-          issue={issue}
+          issue={issue} // issue se předává pro kontext, pokud ho CorrectionForm potřebuje
           suggestion={correctionSuggestion}
-          comment={correctionComment} // Předání nové prop
+          comment={correctionComment}
           onSuggestionChange={onSuggestionChange}
-          onCommentChange={onCorrectionCommentChange} // Předání nové prop
-          onSubmit={() => onSubmitCorrection(index)} // Předáme index pro submit handler v App.js
+          onCommentChange={onCorrectionCommentChange}
+          onSubmit={() => onSubmitCorrection(index)}
           onCancel={onCancelCorrection}
           isLoading={isLoading}
         />

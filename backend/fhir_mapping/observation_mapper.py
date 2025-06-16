@@ -79,97 +79,273 @@ def parse_vital_signs_data(nlp_entities: Optional[List[Dict[str, Any]]], text: s
     """
     vital_signs_data = {}
     vital_sign_target_entity_types = ['CARDINAL', 'NUMBER']
-    vital_sign_nlp_window_size = 25
-    surrounding_text_window = 15 # Pro detekci jednotek
+    # Zvětšené okno pro hledání entit, aby zachytilo i kontextově vzdálenější čísla od klíčového slova.
+    vital_sign_nlp_window_size = 35
+    # Okno pro hledání jednotek za číselnou entitou.
+    surrounding_text_window_for_units = 20
 
     # --- Pulz (Srdeční frekvence) ---
     found_pulse_by_nlp = False
-    pulse_keywords = [r"\bPulz\b", r"\bPuls\b", r"\bSF\b", r"Srdeční frekvence", r"Srdecni frekvence"]
-    pulse_unit_regex_map = {"/min": r"/min|tepů/min|tepu/min|bpm"}
+    pulse_keywords = [r"\bPulz\b", r"\bPuls\b", r"\bSF\b", r"Srdeční frekvence", r"Srdecni frekvence", r"Tepová frekvence", r"Tepova frekvence"]
+    pulse_unit_regex_map = {"/min": r"/min|tepů/min|tepu/min|bpm|/min\.|za min"}
 
     if nlp_entities and text:
-        logger.debug(f"parse_vital_signs_data: Pokus o NLP extrakci pro Pulz.")
-        # ... (logika pro pulz, zkráceno pro přehlednost, bude zkopírována z fhir_mapper.py) ...
-        for keyword_pattern in pulse_keywords:
-            for keyword_match in re.finditer(keyword_pattern, text, re.IGNORECASE):
-                # ... (stejná logika jako v původním fhir_mapper.py)
-                # Příklad použití extract_value_and_unit_from_nlp_entity_text
-                # candidate_entities = ... (nalezení kandidátských NLP entit)
-                # if candidate_entities:
-                #    value_entity = candidate_entities[0]
-                #    surrounding = text[value_entity['end_char']: value_entity['end_char'] + surrounding_text_window]
-                #    value, unit = extract_value_and_unit_from_nlp_entity_text(value_entity['text'], surrounding, pulse_unit_regex_map, default_unit="/min")
-                #    if value and unit: vital_signs_data["pulse_value"] = value; vital_signs_data["pulse_unit"] = unit; found_pulse_by_nlp = True; break
-                # ... (fallback na kontextový Regex, pokud extract_value_and_unit selže)
-                # Ponechávám zkrácenou verzi, protože plný kód je v původním souboru
-                # a zde jde o strukturu.
-                # V reálném kódu by zde byla plná logika.
-                # Pro účely tohoto refaktoringu předpokládám, že logika bude zkopírována.
-                pass # Placeholder for actual pulse NLP logic
-            if found_pulse_by_nlp: break
+        logger.debug("parse_vital_signs_data: Pokus o NLP extrakci pro Pulz.")
+        relevant_pulse_entities = find_nlp_entities_near_keyword(
+            text, nlp_entities, pulse_keywords, vital_sign_target_entity_types,
+            window_size=vital_sign_nlp_window_size, search_after_keyword=True
+        )
+        if relevant_pulse_entities:
+            logger.debug(f"Nalezeny relevantní NLP entity pro Pulz: {relevant_pulse_entities}")
+            for entity in relevant_pulse_entities:
+                entity_text_for_value_extraction = entity['text']
+                actual_surrounding_text_start = entity['end_char']
+                actual_surrounding_text_end = actual_surrounding_text_start + surrounding_text_window_for_units
+                actual_surrounding_text = text[actual_surrounding_text_start:actual_surrounding_text_end]
+
+                value_str, unit_str = extract_value_and_unit_from_nlp_entity_text(
+                    entity_text_for_value_extraction,
+                    actual_surrounding_text,
+                    pulse_unit_regex_map,
+                    default_unit="/min"
+                )
+                if value_str:
+                    try:
+                        pulse_val_check = float(value_str)
+                        if 30 <= pulse_val_check <= 300: # Fyziologický rozsah pro pulz
+                            vital_signs_data["pulse_value"] = value_str
+                            vital_signs_data["pulse_unit"] = unit_str if unit_str else "/min"
+                            found_pulse_by_nlp = True
+                            logger.info(f"Nalezen Pulz (NLP): {value_str} {vital_signs_data['pulse_unit']} z entity '{entity['text']}' a okolí '{actual_surrounding_text}'.")
+                            break
+                        else:
+                            logger.debug(f"Hodnota pulzu {pulse_val_check} z NLP je mimo fyziologický rozsah.")
+                            quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota pulzu '{value_str}' ({unit_str}) je mimo očekávaný rozsah.", "field": "pulse_value", "value": value_str})
+                    except ValueError:
+                        logger.debug(f"Hodnota pulzu z NLP entity '{entity['text']}' není platné číslo: {value_str}")
+            if not found_pulse_by_nlp:
+                logger.debug("NLP extrakce pulzu nevedla k validní hodnotě/jednotce z nalezených entit.")
+
     if not found_pulse_by_nlp and text:
         pulse_match_regex = re.search(REGEX_PULSE, text, re.IGNORECASE)
         if pulse_match_regex:
-            vital_signs_data["pulse_value"] = pulse_match_regex.group(1).strip()
-            vital_signs_data["pulse_unit"] = "/min" # Default unit from regex
-            logger.debug(f"Nalezen Pulz (Globální Regex fallback): {vital_signs_data['pulse_value']}")
+            value_str = pulse_match_regex.group(1).strip()
+            try:
+                pulse_val_check = float(value_str)
+                if 30 <= pulse_val_check <= 300:
+                    vital_signs_data["pulse_value"] = value_str
+                    unit_match_in_regex = re.search(pulse_unit_regex_map["/min"], pulse_match_regex.group(0), re.IGNORECASE)
+                    vital_signs_data["pulse_unit"] = "/min" if unit_match_in_regex else "/min"
+                    logger.info(f"Nalezen Pulz (Regex fallback): {vital_signs_data['pulse_value']} {vital_signs_data['pulse_unit']}")
+                else:
+                    logger.debug(f"Hodnota pulzu {pulse_val_check} z Regex je mimo fyziologický rozsah.")
+                    quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota pulzu '{value_str}' (Regex) je mimo očekávaný rozsah.", "field": "pulse_value", "value": value_str})
+            except ValueError:
+                 logger.debug(f"Hodnota pulzu z Regex '{value_str}' není platné číslo.")
         elif not vital_signs_data.get("pulse_value"):
+            logger.info("Hodnota pulzu nenalezena ani pomocí NLP ani Regex.")
             quality_issues_list.append({"level": "info", "message": "Hodnota pulzu nenalezena.", "field": "pulse_value"})
-
 
     # --- Tělesná teplota ---
     found_temp_by_nlp = False
-    temp_keywords = [r"\bTeplota\b", r"\bT\b"]
-    temp_unit_regex_map = {"°C": r"°C|C|st\.C|stupňů Celsia"}
+    temp_keywords = [r"\bTeplota\b", r"\bT\s*:", r"\bTT\b", r"Tělesná teplota", r"Telesna teplota"]
+    temp_unit_regex_map = {"°C": r"°C|C|st\.C|stupňů Celsia|stC"}
     if nlp_entities and text:
-        logger.debug(f"parse_vital_signs_data: Pokus o NLP extrakci pro Teplotu.")
-        # ... (podobná logika jako pro pulz) ...
-        pass # Placeholder
+        logger.debug("parse_vital_signs_data: Pokus o NLP extrakci pro Teplotu.")
+        relevant_temp_entities = find_nlp_entities_near_keyword(
+            text, nlp_entities, temp_keywords, vital_sign_target_entity_types,
+            window_size=vital_sign_nlp_window_size, search_after_keyword=True
+        )
+        if relevant_temp_entities:
+            logger.debug(f"Nalezeny relevantní NLP entity pro Teplotu: {relevant_temp_entities}")
+            for entity in relevant_temp_entities:
+                entity_text_for_value_extraction = entity['text']
+                actual_surrounding_text_start = entity['end_char']
+                actual_surrounding_text_end = actual_surrounding_text_start + surrounding_text_window_for_units
+                actual_surrounding_text = text[actual_surrounding_text_start:actual_surrounding_text_end]
+
+                value_str, unit_str = extract_value_and_unit_from_nlp_entity_text(
+                    entity_text_for_value_extraction,
+                    actual_surrounding_text,
+                    temp_unit_regex_map,
+                    default_unit="°C"
+                )
+                if value_str:
+                    try:
+                        temp_val_check = float(value_str.replace(",", ".")) # Normalizace desetinné čárky
+                        if 30 <= temp_val_check <= 45: # Fyziologický rozsah pro teplotu
+                            vital_signs_data["temperature_value"] = str(temp_val_check)
+                            vital_signs_data["temperature_unit"] = unit_str if unit_str else "°C"
+                            found_temp_by_nlp = True
+                            logger.info(f"Nalezena Teplota (NLP): {str(temp_val_check)} {vital_signs_data['temperature_unit']} z entity '{entity['text']}' a okolí '{actual_surrounding_text}'.")
+                            break
+                        else:
+                            logger.debug(f"Hodnota teploty {temp_val_check} z NLP je mimo fyziologický rozsah.")
+                            quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota teploty '{value_str}' ({unit_str}) je mimo očekávaný rozsah.", "field": "temperature_value", "value": value_str})
+                    except ValueError:
+                        logger.debug(f"Hodnota teploty z NLP entity '{entity['text']}' není platné číslo: {value_str}")
+            if not found_temp_by_nlp:
+                logger.debug("NLP extrakce teploty nevedla k validní hodnotě/jednotce z nalezených entit.")
+
     if not found_temp_by_nlp and text:
         temp_match_regex = re.search(REGEX_TEMPERATURE, text, re.IGNORECASE)
         if temp_match_regex:
-            vital_signs_data["temperature_value"] = temp_match_regex.group(1).strip().replace(",",".")
-            vital_signs_data["temperature_unit"] = "°C"
-            logger.debug(f"Nalezena Teplota (Globální Regex fallback): {vital_signs_data['temperature_value']}")
+            value_str = temp_match_regex.group(1).strip().replace(",",".")
+            try:
+                temp_val_check = float(value_str)
+                if 30 <= temp_val_check <= 45:
+                    vital_signs_data["temperature_value"] = value_str
+                    vital_signs_data["temperature_unit"] = "°C"
+                    logger.info(f"Nalezena Teplota (Regex fallback): {vital_signs_data['temperature_value']} {vital_signs_data['temperature_unit']}")
+                else:
+                    logger.debug(f"Hodnota teploty {temp_val_check} z Regex je mimo fyziologický rozsah.")
+                    quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota teploty '{value_str}' (Regex) je mimo očekávaný rozsah.", "field": "temperature_value", "value": value_str})
+            except ValueError:
+                logger.debug(f"Hodnota teploty z Regex '{value_str}' není platné číslo.")
         elif not vital_signs_data.get("temperature_value"):
+            logger.info("Hodnota teploty nenalezena ani pomocí NLP ani Regex.")
             quality_issues_list.append({"level": "info", "message": "Hodnota teploty nenalezena.", "field": "temperature_value"})
 
     # --- Tělesná výška ---
     found_height_by_nlp = False
-    height_keywords = [r"\bVýška\b", r"\bVýš\.", r"Vyska"]
-    height_unit_regex_map = {"cm": r"cm|centimetrů"}
+    height_keywords = [r"\bVýška\b", r"\bVýš\.", r"Vyska", r"Výška \(cm\)", r"Výška cm"]
+    height_unit_regex_map = {"cm": r"cm|centimetrů", "m": r"m|metrů"} # Podpora pro metry
     if nlp_entities and text:
-        logger.debug(f"parse_vital_signs_data: Pokus o NLP extrakci pro Výšku.")
-        # ... (podobná logika) ...
-        pass # Placeholder
+        logger.debug("parse_vital_signs_data: Pokus o NLP extrakci pro Výšku.")
+        relevant_height_entities = find_nlp_entities_near_keyword(
+            text, nlp_entities, height_keywords, vital_sign_target_entity_types,
+            window_size=vital_sign_nlp_window_size, search_after_keyword=True
+        )
+        if relevant_height_entities:
+            logger.debug(f"Nalezeny relevantní NLP entity pro Výšku: {relevant_height_entities}")
+            for entity in relevant_height_entities:
+                entity_text_for_value_extraction = entity['text']
+                actual_surrounding_text_start = entity['end_char']
+                actual_surrounding_text_end = actual_surrounding_text_start + surrounding_text_window_for_units
+                actual_surrounding_text = text[actual_surrounding_text_start:actual_surrounding_text_end]
+
+                value_str, unit_str = extract_value_and_unit_from_nlp_entity_text(
+                    entity_text_for_value_extraction,
+                    actual_surrounding_text,
+                    height_unit_regex_map,
+                    default_unit="cm" # Default na cm, pokud není specifikováno
+                )
+                if value_str:
+                    try:
+                        height_val_check = float(value_str.replace(",", "."))
+                        # Převod metrů na cm, pokud je to nutné
+                        if unit_str == "m":
+                            height_val_check *= 100
+                            unit_str = "cm" # Normalizace na cm
+
+                        if 50 <= height_val_check <= 250: # Fyziologický rozsah pro výšku v cm
+                            vital_signs_data["height_value"] = str(height_val_check)
+                            vital_signs_data["height_unit"] = "cm" # Vždy ukládáme v cm
+                            found_height_by_nlp = True
+                            logger.info(f"Nalezena Výška (NLP): {str(height_val_check)} cm z entity '{entity['text']}' (pův. jednotka: {unit_str if unit_str else 'neznámá'}) a okolí '{actual_surrounding_text}'.")
+                            break
+                        else:
+                            logger.debug(f"Hodnota výšky {height_val_check} cm z NLP je mimo fyziologický rozsah.")
+                            quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota výšky '{value_str}' (pův. jednotka: {unit_str}) je mimo očekávaný rozsah po převodu na cm.", "field": "height_value", "value": value_str})
+                    except ValueError:
+                        logger.debug(f"Hodnota výšky z NLP entity '{entity['text']}' není platné číslo: {value_str}")
+            if not found_height_by_nlp:
+                logger.debug("NLP extrakce výšky nevedla k validní hodnotě/jednotce z nalezených entit.")
+
     if not found_height_by_nlp and text:
         height_match_regex = re.search(REGEX_HEIGHT, text, re.IGNORECASE)
         if height_match_regex:
-            vital_signs_data["height_value"] = height_match_regex.group(1).strip().replace(",",".")
-            vital_signs_data["height_unit"] = height_match_regex.group(2) if height_match_regex.group(2) and height_match_regex.group(2).lower() == "cm" else "cm"
-            logger.debug(f"Nalezena Výška (Globální Regex fallback): {vital_signs_data['height_value']}")
+            value_str = height_match_regex.group(1).strip().replace(",",".")
+            unit_from_regex = height_match_regex.group(2).lower() if height_match_regex.group(2) else "cm"
+            try:
+                height_val_check = float(value_str)
+                if unit_from_regex == "m":
+                    height_val_check *= 100
+
+                if 50 <= height_val_check <= 250:
+                    vital_signs_data["height_value"] = str(height_val_check)
+                    vital_signs_data["height_unit"] = "cm"
+                    logger.info(f"Nalezena Výška (Regex fallback): {str(height_val_check)} cm (pův. jednotka z Regex: {unit_from_regex})")
+                else:
+                    logger.debug(f"Hodnota výšky {height_val_check} cm z Regex je mimo fyziologický rozsah.")
+                    quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota výšky '{value_str}' (Regex, jednotka: {unit_from_regex}) je mimo očekávaný rozsah po převodu na cm.", "field": "height_value", "value": value_str})
+            except ValueError:
+                logger.debug(f"Hodnota výšky z Regex '{value_str}' není platné číslo.")
         elif not vital_signs_data.get("height_value"):
+            logger.info("Hodnota výšky nenalezena ani pomocí NLP ani Regex.")
             quality_issues_list.append({"level": "info", "message": "Hodnota výšky nenalezena.", "field": "height_value"})
 
     # --- Tělesná hmotnost ---
     found_weight_by_nlp = False
-    weight_keywords = [r"\bHmotnost\b", r"\bHm\.", r"\bVáha\b", r"Vaha"]
-    weight_unit_regex_map = {"kg": r"kg|kilogramů"}
+    weight_keywords = [r"\bHmotnost\b", r"\bHm\.", r"\bVáha\b", r"Vaha", r"Hmotnost \(kg\)", r"Váha kg"]
+    weight_unit_regex_map = {"kg": r"kg|kilogramů|kilogramy"}
     if nlp_entities and text:
-        logger.debug(f"parse_vital_signs_data: Pokus o NLP extrakci pro Hmotnost.")
-        # ... (podobná logika) ...
-        pass # Placeholder
+        logger.debug("parse_vital_signs_data: Pokus o NLP extrakci pro Hmotnost.")
+        relevant_weight_entities = find_nlp_entities_near_keyword(
+            text, nlp_entities, weight_keywords, vital_sign_target_entity_types,
+            window_size=vital_sign_nlp_window_size, search_after_keyword=True
+        )
+        if relevant_weight_entities:
+            logger.debug(f"Nalezeny relevantní NLP entity pro Hmotnost: {relevant_weight_entities}")
+            for entity in relevant_weight_entities:
+                entity_text_for_value_extraction = entity['text']
+                actual_surrounding_text_start = entity['end_char']
+                actual_surrounding_text_end = actual_surrounding_text_start + surrounding_text_window_for_units
+                actual_surrounding_text = text[actual_surrounding_text_start:actual_surrounding_text_end]
+
+                value_str, unit_str = extract_value_and_unit_from_nlp_entity_text(
+                    entity_text_for_value_extraction,
+                    actual_surrounding_text,
+                    weight_unit_regex_map,
+                    default_unit="kg"
+                )
+                if value_str:
+                    try:
+                        weight_val_check = float(value_str.replace(",", "."))
+                        if 1 <= weight_val_check <= 300: # Fyziologický rozsah pro hmotnost
+                            vital_signs_data["weight_value"] = str(weight_val_check)
+                            vital_signs_data["weight_unit"] = unit_str if unit_str else "kg"
+                            found_weight_by_nlp = True
+                            logger.info(f"Nalezena Hmotnost (NLP): {str(weight_val_check)} {vital_signs_data['weight_unit']} z entity '{entity['text']}' a okolí '{actual_surrounding_text}'.")
+                            break
+                        else:
+                            logger.debug(f"Hodnota hmotnosti {weight_val_check} z NLP je mimo fyziologický rozsah.")
+                            quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota hmotnosti '{value_str}' ({unit_str}) je mimo očekávaný rozsah.", "field": "weight_value", "value": value_str})
+                    except ValueError:
+                        logger.debug(f"Hodnota hmotnosti z NLP entity '{entity['text']}' není platné číslo: {value_str}")
+            if not found_weight_by_nlp:
+                logger.debug("NLP extrakce hmotnosti nevedla k validní hodnotě/jednotce z nalezených entit.")
+
     if not found_weight_by_nlp and text:
         weight_match_regex = re.search(REGEX_WEIGHT, text, re.IGNORECASE)
         if weight_match_regex:
-            vital_signs_data["weight_value"] = weight_match_regex.group(1).strip().replace(",",".")
-            vital_signs_data["weight_unit"] = weight_match_regex.group(2) if weight_match_regex.group(2) and weight_match_regex.group(2).lower() == "kg" else "kg"
-            logger.debug(f"Nalezena Hmotnost (Globální Regex fallback): {vital_signs_data['weight_value']}")
+            value_str = weight_match_regex.group(1).strip().replace(",",".")
+            try:
+                weight_val_check = float(value_str)
+                if 1 <= weight_val_check <= 300:
+                    vital_signs_data["weight_value"] = value_str
+                    # Regex pro hmotnost by měl zachytit jednotku ve skupině 2, ale pro jistotu default
+                    unit_from_regex = weight_match_regex.group(2).lower() if weight_match_regex.group(2) and weight_match_regex.group(2).lower() == "kg" else "kg"
+                    vital_signs_data["weight_unit"] = unit_from_regex
+                    logger.info(f"Nalezena Hmotnost (Regex fallback): {vital_signs_data['weight_value']} {vital_signs_data['weight_unit']}")
+                else:
+                    logger.debug(f"Hodnota hmotnosti {weight_val_check} z Regex je mimo fyziologický rozsah.")
+                    quality_issues_list.append({"level": "warning", "message": f"Nalezená hodnota hmotnosti '{value_str}' (Regex) je mimo očekávaný rozsah.", "field": "weight_value", "value": value_str})
+            except ValueError:
+                logger.debug(f"Hodnota hmotnosti z Regex '{value_str}' není platné číslo.")
         elif not vital_signs_data.get("weight_value"):
+            logger.info("Hodnota hmotnosti nenalezena ani pomocí NLP ani Regex.")
             quality_issues_list.append({"level": "info", "message": "Hodnota hmotnosti nenalezena.", "field": "weight_value"})
 
-    if not text and not nlp_entities and not vital_signs_data:
-        quality_issues_list.append({"level": "info", "message": "parse_vital_signs_data: Nelze hledat vitální funkce - chybí text i NLP entity."})
+    if not text and not nlp_entities and not vital_signs_data: # Kontrola, zda byla nějaká data k dispozici
+        logger.info("parse_vital_signs_data: Nelze hledat vitální funkce - chybí text i NLP entity.")
+        # Přidání obecného quality issue, pokud žádná data nebyla nalezena a nebyly ani vstupy
+        if not quality_issues_list: # Jen pokud ještě nebyly přidány specifické issues
+             quality_issues_list.append({"level": "info", "message": "Nebyly poskytnuty žádné vstupní data (text/NLP) pro parsování vitálních funkcí."})
+    elif not vital_signs_data: # Pokud byly vstupy, ale nic se nenašlo
+        logger.info("parse_vital_signs_data: Nepodařilo se extrahovat žádné vitální funkce.")
+        # quality_issues_list již budou obsahovat zprávy pro jednotlivé nenalezené funkce
+
     return vital_signs_data
 
 
