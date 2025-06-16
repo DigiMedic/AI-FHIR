@@ -87,23 +87,25 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
 - [x] **Pokročilá validace a návrh korekce dat:**
     - [x] Implementace pokročilé validace extrahovaných dat (RČ vs datum narození, pohlaví z RČ, fyziologické rozsahy, základní časová konzistence).
     - [x] Backend generuje strukturované "quality issues". Implementována základní UI funkcionalita ve frontendu pro navrhování korekcí k těmto issues; návrhy jsou logovány na backendu. Plnohodnotné zpracování korekcí (např. jejich aplikace na data, uživatelské rozhraní pro revizi a schvalování korekcí) a integrace do UI pro revizi dat jsou dalšími kroky.
+    - [ ] Implementace plnohodnotného zpracování uživatelských korekcí dat (revize, schvalování, aplikace změn).
 - [ ] **Vylepšení UI/UX:**
     - [ ] Zapracování zpětné vazby od uživatelů (pokud bude k dispozici).
     - [~] Zlepšení vizualizace komplexnějších FHIR zdrojů nebo chybových stavů. (Backend poskytuje strukturované 'quality issues', frontend nyní tyto problémy zobrazuje přehledněji. Refaktoring `App.js` na menší komponenty může dále přispět k lepší vizualizaci a údržbě).
 - [x]/[~] **Formalizace testování, výkonnostní optimalizace a refaktoring:**
     - [x] Implementována a rozšířena sada jednotkových a integračních testů pro backend (endpointy, logika extrakce a mapování, API klient) pomocí pytest.
     - [~] Provedeno základní profilování kritických částí aplikace (NLP extrakce, FHIR mapování) a identifikace potenciálních oblastí pro optimalizaci. Výkon je prozatím považován za akceptovatelný pro typické vstupy.
-    - [ ] Refaktoring backendového souboru `fhir_mapper.py` pro lepší čitelnost, modularitu a údržbu.
-    - [ ] Přechod z `print` na standardní `logging` modul v celém backendu pro konzistentní a konfigurovatelné logování.
+    - [~] Refaktoring backendového souboru `fhir_mapper.py` pro lepší čitelnost, modularitu a údržbu.
+    - [~] Přechod z `print` na standardní `logging` modul v celém backendu pro konzistentní a konfigurovatelné logování.
     - [ ] Refaktoring frontendového souboru `App.js` na menší, lépe spravovatelné a znovupoužitelné komponenty.
     - [ ] Zvážit úpravu URL backendu v testech (aktuálně pravděpodobně napevno).
 
 ### Fáze 4: Testování a finalizace (Měsíc 7)
 - [~] Komplexní testování komponenty: Doplnit testy pro backend endpoint `/api/suggest_correction` a odpovídající frontendovou funkcionalitu. (Základní frontendové a specifické backendové testy již přidány).
-- [x] Implementován reálný DigiMedic API klient v backendu s možností konfigurace přes proměnné prostředí a automatickým odesíláním FHIR Bundlů z hlavního zpracovávacího endpointu. Propojení s frontendem pro řízení tohoto procesu a plná integrace s produkčním API je dalším krokem.
+- [x] Backend: Implementován reálný DigiMedic API klient s konfigurací a automatickým odesíláním.
+- [ ] Integrace: Propojení frontendového řízení odesílání na DigiMedic API a plná integrace s produkčním API.
 - [ ] Tvorba uživatelské dokumentace.
 - [ ] Příprava na nasazení.
-- [ ] Aktualizace `README.md`: Doplnění informací o doporučené verzi Pythonu pro backend, zpřesnění instalace backendových závislostí a detailnější instrukce pro instalaci a konfiguraci Tesseract OCR.
+- [~] Aktualizace `README.md`: Doplnění informací o doporučené verzi Pythonu pro backend, zpřesnění instalace backendových závislostí a detailnější instrukce pro instalaci a konfiguraci Tesseract OCR.
 ## Začínáme
 
 ### Předpoklady
@@ -115,7 +117,8 @@ Tento diagram zobrazuje tok zpracování dat v rámci AI-FHIR komponenty, od nah
     - Oficiální instalační příručka: [Tesseract OCR Installation](https://tesseract-ocr.github.io/tessdoc/Installation.html).
     - Ujistěte se, že máte nainstalovaná jazyková data minimálně pro češtinu (`ces`) a případně angličtinu (`eng`), pokud budete zpracovávat dokumenty v těchto jazycích. Další jazyky dle potřeby.
     - Například na systémech Debian/Ubuntu se jazyková data často instalují pomocí balíčku jako `tesseract-ocr-ces`. Ověřte si název balíčku pro vaši distribuci.
-    - Aplikace očekává, že Tesseract je v systémové PATH. Pokud tomu tak není, může být potřeba upravit cestu k `tesseract_cmd` v souboru `backend/ai_models/text_extractor.py` (aktuálně se však spoléhá na PATH).
+    - Aplikace očekává, že Tesseract je v systémové PATH. Pokud tomu tak není, může být potřeba upravit cestu k `tesseract_cmd` v souboru `backend/ai_models/text_extractor.py` (aktuálně se však spoléhá na PATH). Pro Windows uživatele: Během instalace Tesseractu se ujistěte, že jste zaškrtli volbu pro přidání Tesseractu do systémové PATH, nebo jej přidejte manuálně po instalaci. Můžete také explicitně nastavit cestu k `tesseract.exe` v proměnné prostředí `TESSDATA_PREFIX` nebo přímo v kódu (což se aktuálně nedoporučuje, pokud je Tesseract správně v PATH).
+    - Ověření instalace: Po instalaci otevřete terminál (příkazový řádek) a zadejte `tesseract --version`. Měli byste vidět informace o verzi Tesseractu. Pokud příkaz není nalezen, Tesseract pravděpodobně není správně přidán do systémové PATH.
 - **Stanza NLP Model:** Při prvním spuštění komponenty, která využívá NLP model Stanza, může dojít k automatickému stažení jazykového modelu pro češtinu (pokud již není přítomen v systému v defaultním umístění Stanza modelů, typicky `~/stanza_resources`). Toto stažení vyžaduje připojení k internetu.
 
 ### Instalace
