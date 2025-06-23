@@ -62,20 +62,5 @@ const CorrectionForm = ({
     </div>
   );
 };
-        disabled={isLoading}
-        style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-      >
-        {isLoading ? 'Odesílání...' : 'Odeslat návrh'}
-      </button>
-      <button
-        onClick={onCancel}
-        disabled={isLoading}
-        style={{ padding: '5px 10px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-      >
-        Zrušit
-      </button>
-    </div>
-  );
-};
 
 export default CorrectionForm;

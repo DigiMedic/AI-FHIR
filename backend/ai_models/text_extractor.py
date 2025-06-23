@@ -44,7 +44,8 @@ def get_stanza_pipeline():
             # V případě selhání stahování by aplikace neměla pokračovat v pokusu o použití Stanza.
             raise RuntimeError(f"Selhání stahování/načítání Stanza modelu: {e}") from e
 
-        # stanza.Pipeline vyvolá chybu, pokud model není nalezen, takže explicitní kontrola zde není nutná.
+        # stanza.Pipeline vyvolá chybu, pokud model není nalezen.
+        # Použijeme zjednodušenou inicializaci. Po vyčištění cache by měl být 'default' model funkční.
         stanza_nlp_pipeline = stanza.Pipeline('cs', processors='tokenize,ner', verbose=False, logging_level='WARN')
         logger.info("Stanza pipeline inicializována.")
     return stanza_nlp_pipeline

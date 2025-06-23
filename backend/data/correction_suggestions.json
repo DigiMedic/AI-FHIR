@@ -1,0 +1,14 @@
+[
+  {
+    "originalIssue": {
+      "level": "string",
+      "message": "string",
+      "field": "string",
+      "value": "string"
+    },
+    "suggestedValue": "string",
+    "fileName": "string",
+    "comment": "string",
+    "received_timestamp": "2025-06-23T01:56:58.791100Z"
+  }
+]
